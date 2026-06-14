@@ -163,6 +163,10 @@ function messageNode(message) {
 	if (message.thinking) {
 		const thinking = document.createElement('details');
 		thinking.className = 'thinking';
+		thinking.open = Boolean(message.thinkingOpen);
+		thinking.addEventListener('toggle', () => {
+			message.thinkingOpen = thinking.open;
+		});
 		const label = document.createElement('summary');
 		label.className = 'thinking-label';
 		label.textContent = message.pending ? 'thinking' : 'thinking log';
