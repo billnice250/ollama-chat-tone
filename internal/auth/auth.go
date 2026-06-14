@@ -44,7 +44,7 @@ func New(ctx context.Context, cfg config.Config, store *db.Store) (*Manager, err
 		return nil, err
 	}
 	m := &Manager{cfg: cfg, store: store, templates: tmpl}
-	if cfg.AuthMode() == "local" {
+	if localAvailable(cfg) {
 		hash, err := bcrypt.GenerateFromPassword([]byte(cfg.BasicPass), bcrypt.DefaultCost)
 		if err != nil {
 			return nil, err
@@ -53,7 +53,7 @@ func New(ctx context.Context, cfg config.Config, store *db.Store) (*Manager, err
 			return nil, err
 		}
 	}
-	if cfg.AuthMode() == "oidc" {
+	if oidcAvailable(cfg) {
 		p, err := oidc.NewProvider(ctx, cfg.OIDCIssuer)
 		if err != nil {
 			return nil, err
@@ -71,36 +71,38 @@ func New(ctx context.Context, cfg config.Config, store *db.Store) (*Manager, err
 
 func (m *Manager) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch m.cfg.AuthMode() {
-		case "none":
+		if m.cfg.AuthMode() == "none" {
 			ctx := context.WithValue(r.Context(), EmailKey, "anonymous")
 			ctx = context.WithValue(ctx, AdminKey, false)
 			next.ServeHTTP(w, r.WithContext(ctx))
-		case "local":
-			username, ok := m.readSession(r)
-			if !ok {
-				http.Redirect(w, r, "/auth/login", http.StatusFound)
-				return
-			}
-			user, err := m.store.GetUser(r.Context(), username)
-			if err != nil || !user.Approved {
-				clearCookie(w, sessionCookie)
-				http.Redirect(w, r, "/auth/login", http.StatusFound)
-				return
-			}
-			ctx := context.WithValue(r.Context(), EmailKey, user.Username)
-			ctx = context.WithValue(ctx, AdminKey, user.IsAdmin)
-			next.ServeHTTP(w, r.WithContext(ctx))
-		case "oidc":
-			email := readCookie(r, "email")
-			if email == "" {
-				http.Redirect(w, r, "/auth/login", http.StatusFound)
-				return
-			}
-			ctx := context.WithValue(r.Context(), EmailKey, email)
-			ctx = context.WithValue(ctx, AdminKey, false)
-			next.ServeHTTP(w, r.WithContext(ctx))
+			return
 		}
+
+		if localAvailable(m.cfg) {
+			username, ok := m.readSession(r)
+			if ok {
+				user, err := m.store.GetUser(r.Context(), username)
+				if err == nil && user.Approved {
+					ctx := context.WithValue(r.Context(), EmailKey, user.Username)
+					ctx = context.WithValue(ctx, AdminKey, user.IsAdmin)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+				clearCookie(w, sessionCookie)
+			}
+		}
+
+		if oidcAvailable(m.cfg) {
+			email := readCookie(r, "email")
+			if email != "" {
+				ctx := context.WithValue(r.Context(), EmailKey, email)
+				ctx = context.WithValue(ctx, AdminKey, false)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+		}
+
+		http.Redirect(w, r, "/auth/login", http.StatusFound)
 	})
 }
 
@@ -109,11 +111,11 @@ func (m *Manager) Login(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
 	}
-	if r.URL.Query().Get("provider") == "oidc" && m.oauth2Config != nil {
+	if r.URL.Query().Get("provider") == "oidc" && oidcAvailable(m.cfg) && m.oauth2Config != nil {
 		m.startOIDC(w, r)
 		return
 	}
-	if m.cfg.AuthMode() == "local" {
+	if localAvailable(m.cfg) {
 		m.localLogin(w, r)
 		return
 	}
@@ -138,7 +140,7 @@ func (m *Manager) startOIDC(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Manager) Signup(w http.ResponseWriter, r *http.Request) {
-	if m.cfg.AuthMode() != "local" {
+	if !localAvailable(m.cfg) {
 		http.NotFound(w, r)
 		return
 	}
@@ -169,6 +171,10 @@ func (m *Manager) Signup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Manager) Callback(w http.ResponseWriter, r *http.Request) {
+	if m.oauth2Config == nil || m.verifier == nil {
+		http.NotFound(w, r)
+		return
+	}
 	if r.URL.Query().Get("state") != readCookie(r, "state") {
 		http.Error(w, "bad state", 400)
 		return
@@ -206,17 +212,14 @@ func (m *Manager) Callback(w http.ResponseWriter, r *http.Request) {
 
 func (m *Manager) Logout(w http.ResponseWriter, r *http.Request) {
 	clearCookie(w, "email")
-	switch m.cfg.AuthMode() {
-	case "local":
+	if localAvailable(m.cfg) {
 		clearCookie(w, sessionCookie)
-		m.writeLogoutPage(w)
-		return
-	case "oidc":
-		m.writeLogoutPage(w)
-		return
-	default:
-		http.Redirect(w, r, "/", http.StatusFound)
 	}
+	if m.cfg.AuthMode() != "none" {
+		m.writeLogoutPage(w)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 func (m *Manager) localLogin(w http.ResponseWriter, r *http.Request) {
@@ -269,6 +272,14 @@ func WriteJSON(w http.ResponseWriter, v any) {
 
 func clearCookie(w http.ResponseWriter, name string) {
 	http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+}
+
+func localAvailable(cfg config.Config) bool {
+	return cfg.BasicUser != "" && cfg.BasicPass != ""
+}
+
+func oidcAvailable(cfg config.Config) bool {
+	return cfg.OIDCIssuer != "" && cfg.OIDCClientID != "" && cfg.OIDCClientSecret != ""
 }
 
 func (m *Manager) signSession(username string) string {
