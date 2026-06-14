@@ -1,41 +1,46 @@
+name: ollama-chat-tone
+
 services:
-  ollama-chat:
+  ollama-chat-tone:
     build: .
-    image: ollama-chat-client:local
+    image: ollama-chat-tone:local
     ports:
       - "8080:8080"
     environment:
-      APP_NAME: "Ollama Chat"
+      APP_NAME: "Ollama Chat Tone"
       ADDR: ":8080"
       DB_PATH: "/data/app.db"
       OLLAMA_URL: "http://ollama:11434"
       OLLAMA_TIMEOUT: "5"
       DEFAULT_MODEL: "llama3.2"
-
-      # Basic auth mode. Used only if OIDC_* is not configured.
       BASIC_AUTH_USER: "admin"
       BASIC_AUTH_PASSWORD: "change-me"
-
-      # OIDC mode. Uncomment these and remove BASIC_AUTH_* for Google/Auth0/Keycloak/Zitadel/etc.
-      # OIDC_ISSUER: "https://accounts.google.com"
-      # OIDC_CLIENT_ID: "your-client-id"
-      # OIDC_CLIENT_SECRET: "your-client-secret"
-      # OIDC_REDIRECT_URL: "/auth/callback"
-      # ALLOWED_EMAILS: "you@example.com"
     volumes:
-      - app-data:/data
+      - ollama-chat-tone-data:/data
     depends_on:
-      - ollama
+      ollama-models:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   ollama:
     image: ollama/ollama:latest
-    volumes:
-      - ollama-data:/root/.ollama
     ports:
       - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
     restart: unless-stopped
 
+  ollama-models:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_HOST: "http://ollama:11434"
+    command: >
+      sh -c "until ollama list >/dev/null 2>&1; do sleep 2; done;
+      ollama pull llama3.2"
+    depends_on:
+      - ollama
+    restart: "no"
+
 volumes:
-  app-data:
+  ollama-chat-tone-data:
   ollama-data:

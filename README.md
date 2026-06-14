@@ -1,4 +1,4 @@
-# Ollama Chat Client
+# Ollama Chat Tone
 
 Self-contained Go web client for Ollama with local login, optional OIDC/OAuth login, streaming responses, per-user conversations, and embedded static assets.
 
@@ -13,7 +13,7 @@ cp .env.example .env
 Common settings:
 
 ```env
-APP_NAME="Ollama Chat"
+APP_NAME="Ollama Chat Tone"
 ADDR=":8080"
 SESSION_SECRET="change-me-to-a-long-random-value"
 DB_PATH="./app.db"
@@ -36,14 +36,14 @@ Download the matching archive from GitHub Releases, unpack it, create `.env`, th
 
 ```bash
 cp .env.example .env
-./ollama-chat-client
+./ollama-chat-tone
 ```
 
 Windows:
 
 ```powershell
 copy .env.example .env
-.\ollama-chat-client.exe
+.\ollama-chat-tone.exe
 ```
 
 The binary is self-contained: the web UI and templates are embedded in the executable. You only need the executable and a `.env` file.
@@ -78,12 +78,12 @@ make build-windows
 
 Artifacts are written to `dist/`:
 
-- `ollama-chat-client_<version>_darwin_amd64.tar.gz`
-- `ollama-chat-client_<version>_darwin_arm64.tar.gz`
-- `ollama-chat-client_<version>_linux_amd64.tar.gz`
-- `ollama-chat-client_<version>_linux_arm64.tar.gz`
-- `ollama-chat-client_<version>_windows_amd64.zip`
-- `ollama-chat-client_<version>_windows_arm64.zip`
+- `ollama-chat-tone_<version>_darwin_amd64.tar.gz`
+- `ollama-chat-tone_<version>_darwin_arm64.tar.gz`
+- `ollama-chat-tone_<version>_linux_amd64.tar.gz`
+- `ollama-chat-tone_<version>_linux_arm64.tar.gz`
+- `ollama-chat-tone_<version>_windows_amd64.zip`
+- `ollama-chat-tone_<version>_windows_arm64.zip`
 - `checksums.txt`
 
 Set a release version explicitly:
@@ -97,8 +97,8 @@ make release VERSION=v1.0.0
 Build and run the app container:
 
 ```bash
-docker build -t ollama-chat-client:local .
-docker run --rm -p 8080:8080 --env-file .env -e DB_PATH=/data/app.db -v ollama-chat-data:/data ollama-chat-client:local
+docker build -t ollama-chat-tone:local .
+docker run --rm -p 8080:8080 --env-file .env -e DB_PATH=/data/app.db -v ollama-chat-tone-data:/data ollama-chat-tone:local
 ```
 
 If Ollama is running on the host machine from Docker Desktop, set:
@@ -110,7 +110,7 @@ OLLAMA_URL="http://host.docker.internal:11434"
 For Linux Docker hosts, use the host gateway:
 
 ```bash
-docker run --rm -p 8080:8080 --add-host=host.docker.internal:host-gateway --env-file .env -e DB_PATH=/data/app.db -v ollama-chat-data:/data ollama-chat-client:local
+docker run --rm -p 8080:8080 --add-host=host.docker.internal:host-gateway --env-file .env -e DB_PATH=/data/app.db -v ollama-chat-tone-data:/data ollama-chat-tone:local
 ```
 
 ## Docker Compose
@@ -124,14 +124,16 @@ docker compose up --build
 The included [compose.yml](compose.yml) uses the official Ollama image:
 
 ```yaml
+name: ollama-chat-tone
+
 services:
-  ollama-chat:
+  ollama-chat-tone:
     build: .
-    image: ollama-chat-client:local
+    image: ollama-chat-tone:local
     ports:
       - "8080:8080"
     environment:
-      APP_NAME: "Ollama Chat"
+      APP_NAME: "Ollama Chat Tone"
       ADDR: ":8080"
       DB_PATH: "/data/app.db"
       OLLAMA_URL: "http://ollama:11434"
@@ -140,9 +142,10 @@ services:
       BASIC_AUTH_USER: "admin"
       BASIC_AUTH_PASSWORD: "change-me"
     volumes:
-      - app-data:/data
+      - ollama-chat-tone-data:/data
     depends_on:
-      - ollama
+      ollama-models:
+        condition: service_completed_successfully
 
   ollama:
     image: ollama/ollama:latest
@@ -151,8 +154,19 @@ services:
     volumes:
       - ollama-data:/root/.ollama
 
+  ollama-models:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_HOST: "http://ollama:11434"
+    command: >
+      sh -c "until ollama list >/dev/null 2>&1; do sleep 2; done;
+      ollama pull llama3.2"
+    depends_on:
+      - ollama
+    restart: "no"
+
 volumes:
-  app-data:
+  ollama-chat-tone-data:
   ollama-data:
 ```
 
@@ -171,7 +185,7 @@ http://localhost:8080
 Pull a model into the Compose Ollama service:
 
 ```bash
-docker compose exec ollama ollama pull llama3.2
+docker compose run --rm ollama-models
 ```
 
 To use an external Ollama instead, set `OLLAMA_URL` to that server and remove or ignore the `ollama` service from `compose.yml`.

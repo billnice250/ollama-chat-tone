@@ -1,4 +1,4 @@
-const localStorageKey = 'ollama-chat-client.chats.v1';
+const localStorageKey = 'ollama-chat-tone.chats.v1';
 
 const el = {
 	appName: document.getElementById('app-name'),
@@ -21,7 +21,7 @@ const el = {
 };
 
 const state = {
-	appName: 'Ollama Chat',
+	appName: 'Ollama Chat Tone',
 	defaultModel: 'llama3.2',
 	authMode: 'none',
 	storageMode: 'local',

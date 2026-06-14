@@ -1,4 +1,4 @@
-const themeKey = 'ollama-chat-client.theme';
+const themeKey = 'ollama-chat-tone.theme';
 
 function preferredTheme() {
 	const saved = localStorage.getItem(themeKey);

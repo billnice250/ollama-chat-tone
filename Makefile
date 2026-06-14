@@ -1,4 +1,4 @@
-APP_NAME ?= ollama-chat-client
+APP_NAME ?= ollama-chat-tone
 CMD ?= ./cmd/server
 DIST_DIR ?= dist
 BIN_DIR ?= bin

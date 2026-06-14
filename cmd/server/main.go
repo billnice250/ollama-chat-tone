@@ -11,11 +11,11 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/billnice250/ollama-chat-client/internal/auth"
-	"github.com/billnice250/ollama-chat-client/internal/config"
-	"github.com/billnice250/ollama-chat-client/internal/db"
-	"github.com/billnice250/ollama-chat-client/internal/ollama"
-	"github.com/billnice250/ollama-chat-client/internal/static"
+	"github.com/billnice250/ollama-chat-tone/internal/auth"
+	"github.com/billnice250/ollama-chat-tone/internal/config"
+	"github.com/billnice250/ollama-chat-tone/internal/db"
+	"github.com/billnice250/ollama-chat-tone/internal/ollama"
+	"github.com/billnice250/ollama-chat-tone/internal/static"
 )
 
 func main() {

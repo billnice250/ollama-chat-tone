@@ -56,7 +56,7 @@ func Load() Config {
 		log.Println("Using provided SESSION_SECRET.")
 	}
 	return Config{
-		AppName:          getenv("APP_NAME", "Ollama Chat"),
+		AppName:          getenv("APP_NAME", "Ollama Chat Tone"),
 		Addr:             getenv("ADDR", ":12129"),
 		SessionSecret:    getenv("SESSION_SECRET", secret),
 		DBPath:           getenv("DB_PATH", "./app.db"),

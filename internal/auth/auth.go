@@ -12,8 +12,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/billnice250/ollama-chat-client/internal/config"
-	"github.com/billnice250/ollama-chat-client/internal/db"
+	"github.com/billnice250/ollama-chat-tone/internal/config"
+	"github.com/billnice250/ollama-chat-tone/internal/db"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/oauth2"

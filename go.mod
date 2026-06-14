@@ -1,4 +1,4 @@
-module github.com/billnice250/ollama-chat-client
+module github.com/billnice250/ollama-chat-tone
 
 go 1.25.0
 
