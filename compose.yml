@@ -1,0 +1,40 @@
+services:
+  ollama-chat:
+    build: .
+    image: ollama-chat-client:local
+    ports:
+      - "8080:8080"
+    environment:
+      ADDR: ":8080"
+      BASE_URL: "http://localhost:8080"
+      DB_PATH: "/data/app.db"
+      OLLAMA_URL: "http://ollama:11434"
+      DEFAULT_MODEL: "llama3.2"
+
+      # Basic auth mode. Used only if OIDC_* is not configured.
+      BASIC_AUTH_USER: "admin"
+      BASIC_AUTH_PASSWORD: "change-me"
+
+      # OIDC mode. Uncomment these and remove BASIC_AUTH_* for Google/Auth0/Keycloak/Zitadel/etc.
+      # OIDC_ISSUER: "https://accounts.google.com"
+      # OIDC_CLIENT_ID: "your-client-id"
+      # OIDC_CLIENT_SECRET: "your-client-secret"
+      # OIDC_REDIRECT_URL: "http://localhost:8080/auth/callback"
+      # ALLOWED_EMAILS: "you@example.com"
+    volumes:
+      - app-data:/data
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+
+volumes:
+  app-data:
+  ollama-data:
