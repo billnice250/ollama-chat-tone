@@ -38,8 +38,8 @@ type Client struct {
 	HTTP    *http.Client
 }
 
-func New(base string) *Client {
-	return &Client{BaseURL: base, HTTP: &http.Client{Timeout: 5 * time.Minute}}
+func New(base string, timeout time.Duration) *Client {
+	return &Client{BaseURL: base, HTTP: &http.Client{Timeout: timeout}}
 }
 
 func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {

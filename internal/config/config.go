@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -15,6 +16,7 @@ type Config struct {
 	SessionSecret string
 	DBPath        string
 	OllamaURL     string
+	OllamaTimeout time.Duration
 	DefaultModel  string
 
 	BasicUser string
@@ -35,6 +37,7 @@ func Load() Config {
 		SessionSecret:    getenv("SESSION_SECRET", "dev-change-me"),
 		DBPath:           getenv("DB_PATH", "./app.db"),
 		OllamaURL:        getenv("OLLAMA_URL", "http://ollama:11434"),
+		OllamaTimeout:    durationMinutes("OLLAMA_TIMEOUT", 5),
 		DefaultModel:     getenv("DEFAULT_MODEL", "llama3.2"),
 		BasicUser:        getenv("BASIC_AUTH_USER", ""),
 		BasicPass:        getenv("BASIC_AUTH_PASSWORD", ""),
@@ -61,12 +64,8 @@ func (c Config) Validate() error {
 	if err != nil {
 		return fmt.Errorf("ADDR must be in host:port form: %w", err)
 	}
-	portNumber, err := strconv.Atoi(port)
-	if err != nil {
+	if _, err := strconv.Atoi(port); err != nil {
 		return fmt.Errorf("ADDR port must be numeric: %w", err)
-	}
-	if portNumber == 0 {
-		return fmt.Errorf("ADDR must not use port 0")
 	}
 	return nil
 }
@@ -114,6 +113,21 @@ func getenv(k, def string) string {
 		return v
 	}
 	return def
+}
+
+func durationMinutes(k string, def int) time.Duration {
+	v := strings.TrimSpace(os.Getenv(k))
+	if v == "" {
+		return time.Duration(def) * time.Minute
+	}
+	if minutes, err := strconv.Atoi(v); err == nil {
+		return time.Duration(minutes) * time.Minute
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return time.Duration(def) * time.Minute
+	}
+	return d
 }
 
 func parseEnvValue(value string) string {

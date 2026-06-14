@@ -30,7 +30,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	oc := ollama.New(cfg.OllamaURL)
+	oc := ollama.New(cfg.OllamaURL, cfg.OllamaTimeout)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })
@@ -188,7 +188,7 @@ func main() {
 	}
 	actualAddr := listener.Addr().String()
 	log.Printf("%s running at %s", cfg.AppName, appURL(actualAddr))
-	log.Printf("listening on %s configured=%s auth=%s ollama=%s", actualAddr, cfg.Addr, cfg.AuthMode(), cfg.OllamaURL)
+	log.Printf("listening on %s configured=%s auth=%s ollama=%s timeout=%s", actualAddr, cfg.Addr, cfg.AuthMode(), cfg.OllamaURL, cfg.OllamaTimeout)
 	log.Fatal(http.Serve(listener, requestLogger(mux)))
 }
 
