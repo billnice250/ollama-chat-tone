@@ -305,7 +305,6 @@ select {
 }
 
 .thinking {
-	display: block;
 	margin: 0 0 10px;
 	padding: 9px 10px;
 	border-left: 3px solid var(--color-thinking-line);
@@ -317,13 +316,36 @@ select {
 }
 
 .thinking-label {
-	display: block;
-	margin-bottom: 4px;
+	cursor: pointer;
 	color: #64748b;
 	font-size: 11px;
 	font-weight: 750;
 	text-transform: uppercase;
 	letter-spacing: .04em;
+	list-style: none;
+}
+
+.thinking-label::-webkit-details-marker {
+	display: none;
+}
+
+.thinking-label::before {
+	content: "Show";
+	display: inline-block;
+	margin-right: 6px;
+	color: var(--color-accent-strong);
+}
+
+.thinking[open] .thinking-label {
+	margin-bottom: 8px;
+}
+
+.thinking[open] .thinking-label::before {
+	content: "Hide";
+}
+
+.thinking-content {
+	display: block;
 }
 
 .error {

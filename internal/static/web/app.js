@@ -161,12 +161,13 @@ function messageNode(message) {
 	bubble.append(role);
 
 	if (message.thinking) {
-		const thinking = document.createElement('span');
+		const thinking = document.createElement('details');
 		thinking.className = 'thinking';
-		const label = document.createElement('span');
+		const label = document.createElement('summary');
 		label.className = 'thinking-label';
-		label.textContent = message.pending ? 'Thinking' : 'Thinking log';
+		label.textContent = message.pending ? 'thinking' : 'thinking log';
 		const text = document.createElement('span');
+		text.className = 'thinking-content';
 		text.textContent = message.thinking;
 		thinking.append(label, text);
 		bubble.append(thinking);
