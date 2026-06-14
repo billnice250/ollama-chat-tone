@@ -5,10 +5,10 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"embed"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
-	"html"
+	"html/template"
 	"net/http"
 	"strings"
 
@@ -18,6 +18,9 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/oauth2"
 )
+
+//go:embed templates/*.html
+var templateFS embed.FS
 
 type ctxKey string
 
@@ -32,10 +35,15 @@ type Manager struct {
 	provider     *oidc.Provider
 	verifier     *oidc.IDTokenVerifier
 	oauth2Config *oauth2.Config
+	templates    *template.Template
 }
 
 func New(ctx context.Context, cfg config.Config, store *db.Store) (*Manager, error) {
-	m := &Manager{cfg: cfg, store: store}
+	tmpl, err := template.ParseFS(templateFS, "templates/*.html")
+	if err != nil {
+		return nil, err
+	}
+	m := &Manager{cfg: cfg, store: store, templates: tmpl}
 	if cfg.AuthMode() == "local" {
 		hash, err := bcrypt.GenerateFromPassword([]byte(cfg.BasicPass), bcrypt.DefaultCost)
 		if err != nil {
@@ -97,15 +105,33 @@ func (m *Manager) RequireAuth(next http.Handler) http.Handler {
 }
 
 func (m *Manager) Login(w http.ResponseWriter, r *http.Request) {
-	if m.cfg.AuthMode() == "local" {
-		m.localLogin(w, r)
-		return
-	}
 	if m.cfg.AuthMode() == "none" {
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
 	}
+	if r.URL.Query().Get("provider") == "oidc" && m.oauth2Config != nil {
+		m.startOIDC(w, r)
+		return
+	}
+	if m.cfg.AuthMode() == "local" {
+		m.localLogin(w, r)
+		return
+	}
 
+	if r.Method == http.MethodGet {
+		m.writeAuthPage(w, authPageData{
+			AppName:    m.cfg.AppName,
+			Title:      "Log in",
+			ShowOAuth:  m.oauth2Config != nil,
+			OAuthHref:  "/auth/login?provider=oidc",
+			OAuthLabel: "Continue with OAuth",
+		})
+		return
+	}
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
+func (m *Manager) startOIDC(w http.ResponseWriter, r *http.Request) {
 	state := randomState()
 	setCookie(w, "state", state, true)
 	http.Redirect(w, r, m.oauth2Config.AuthCodeURL(state), http.StatusFound)
@@ -117,7 +143,7 @@ func (m *Manager) Signup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet {
-		writeAuthPage(w, m.cfg.AppName, "Sign up", "", true)
+		m.writeLocalAuthPage(w, "Register", "", true)
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -127,7 +153,7 @@ func (m *Manager) Signup(w http.ResponseWriter, r *http.Request) {
 	username := strings.ToLower(strings.TrimSpace(r.FormValue("username")))
 	password := r.FormValue("password")
 	if username == "" || password == "" {
-		writeAuthPage(w, m.cfg.AppName, "Sign up", "username and password are required", true)
+		m.writeLocalAuthPage(w, "Register", "username and password are required", true)
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -136,10 +162,10 @@ func (m *Manager) Signup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := m.store.CreateUser(r.Context(), username, string(hash)); err != nil {
-		writeAuthPage(w, m.cfg.AppName, "Sign up", "user already exists or cannot be created", true)
+		m.writeLocalAuthPage(w, "Register", "user already exists or cannot be created", true)
 		return
 	}
-	writeAuthPage(w, m.cfg.AppName, "Sign up", "request submitted; wait for an admin to approve access", true)
+	m.writeLocalAuthPage(w, "Register", "request submitted; wait for an admin to approve access", true)
 }
 
 func (m *Manager) Callback(w http.ResponseWriter, r *http.Request) {
@@ -179,21 +205,23 @@ func (m *Manager) Callback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Manager) Logout(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{Name: "email", Value: "", Path: "/", MaxAge: -1})
-	if m.cfg.AuthMode() == "local" {
+	clearCookie(w, "email")
+	switch m.cfg.AuthMode() {
+	case "local":
 		clearCookie(w, sessionCookie)
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		name := html.EscapeString(m.cfg.AppName)
-		_, _ = w.Write([]byte(`<!doctype html><title>Logged out</title><body style="font-family:system-ui;margin:40px"><h1>Logged out</h1><p>You are logged out of ` + name + `.</p><p><a href="/auth/login">Log in again</a></p></body>`))
+		m.writeLogoutPage(w)
 		return
+	case "oidc":
+		m.writeLogoutPage(w)
+		return
+	default:
+		http.Redirect(w, r, "/", http.StatusFound)
 	}
-	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 func (m *Manager) localLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
-		writeAuthPage(w, m.cfg.AppName, "Log in", "", false)
+		m.writeLocalAuthPage(w, "Log in", "", false)
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -204,11 +232,11 @@ func (m *Manager) localLogin(w http.ResponseWriter, r *http.Request) {
 	password := r.FormValue("password")
 	user, err := m.store.GetUser(r.Context(), username)
 	if err != nil || bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)) != nil {
-		writeAuthPage(w, m.cfg.AppName, "Log in", "invalid username or password", false)
+		m.writeLocalAuthPage(w, "Log in", "invalid username or password", false)
 		return
 	}
 	if !user.Approved {
-		writeAuthPage(w, m.cfg.AppName, "Log in", "your signup is waiting for admin approval", false)
+		m.writeLocalAuthPage(w, "Log in", "your signup is waiting for admin approval", false)
 		return
 	}
 	setCookie(w, sessionCookie, m.signSession(user.Username), false)
@@ -259,23 +287,61 @@ func (m *Manager) readSession(r *http.Request) (string, bool) {
 	return username, hmac.Equal([]byte(m.signSession(username)), []byte(username+"."+sig))
 }
 
-func writeAuthPage(w http.ResponseWriter, appName, title, message string, signup bool) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+type authPageData struct {
+	AppName              string
+	Title                string
+	Message              string
+	Action               string
+	AltHref              string
+	AltText              string
+	PasswordAutocomplete string
+	ShowLocal            bool
+	ShowOAuth            bool
+	OAuthHref            string
+	OAuthLabel           string
+}
+
+type logoutPageData struct {
+	AppName string
+}
+
+func (m *Manager) writeLocalAuthPage(w http.ResponseWriter, title, message string, signup bool) {
 	action := "/auth/login"
 	altHref := "/auth/signup"
-	altText := "Request access"
+	altText := "Register"
+	autocomplete := "current-password"
 	if signup {
 		action = "/auth/signup"
 		altHref = "/auth/login"
 		altText = "Back to login"
+		autocomplete = "new-password"
 	}
-	msg := ""
-	if message != "" {
-		msg = `<p class="message">` + html.EscapeString(message) + `</p>`
+	m.writeAuthPage(w, authPageData{
+		AppName:              m.cfg.AppName,
+		Title:                title,
+		Message:              message,
+		Action:               action,
+		AltHref:              altHref,
+		AltText:              altText,
+		PasswordAutocomplete: autocomplete,
+		ShowLocal:            true,
+		ShowOAuth:            m.oauth2Config != nil,
+		OAuthHref:            "/auth/login?provider=oidc",
+		OAuthLabel:           "Continue with OAuth",
+	})
+}
+
+func (m *Manager) writeAuthPage(w http.ResponseWriter, data authPageData) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := m.templates.ExecuteTemplate(w, "auth.html", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
-	_, _ = fmt.Fprintf(w, `<!doctype html>
-<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>%s</title>
-<style>body{font-family:system-ui;margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f7f9;color:#111827}.box{width:min(420px,92vw);background:white;border:1px solid #d9dee7;border-radius:8px;padding:24px}input,button{font:inherit;width:100%%;box-sizing:border-box;height:40px;margin:7px 0}input{border:1px solid #d9dee7;border-radius:8px;padding:0 10px}button{border:0;border-radius:8px;background:#0f766e;color:white;font-weight:700}.message{color:#b42318}a{color:#134e4a}</style></head>
-<body><form class="box" method="post" action="%s"><h1>%s</h1><p>%s</p>%s<input name="username" placeholder="Username" autocomplete="username" required><input name="password" type="password" placeholder="Password" autocomplete="current-password" required><button type="submit">%s</button><p><a href="%s">%s</a></p></form></body></html>`,
-		html.EscapeString(title), action, html.EscapeString(title), html.EscapeString(appName), msg, html.EscapeString(title), altHref, altText)
+}
+
+func (m *Manager) writeLogoutPage(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if err := m.templates.ExecuteTemplate(w, "logout.html", logoutPageData{AppName: m.cfg.AppName}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
