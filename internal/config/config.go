@@ -2,7 +2,10 @@ package config
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"strconv"
@@ -29,12 +32,33 @@ type Config struct {
 	AllowedEmails    map[string]bool
 }
 
+func GenerateSessionSecret() string {
+	b := make([]byte, 32)
+	_, err := rand.Read(b)
+	if err == nil {
+		return hex.EncodeToString(b)
+	}
+	log.Panicf("failed to generate session secret: %v", err)
+	os.Exit(1)
+	return ""
+}
+
 func Load() Config {
 	dotenv(".env")
+	secret := os.Getenv("SESSION_SECRET")
+	if secret == "" {
+		log.Println("WARNING: SESSION_SECRET not set, generating random secret. This will invalidate all sessions on restart.")
+		secret = GenerateSessionSecret()
+		os.Setenv("SESSION_SECRET", secret)
+	} else if len(secret) < 32 {
+		log.Println("WARNING: SESSION_SECRET is less than 32 characters, which may be insecure.")
+	} else {
+		log.Println("Using provided SESSION_SECRET.")
+	}
 	return Config{
 		AppName:          getenv("APP_NAME", "Ollama Chat"),
-		Addr:             getenv("ADDR", ":8080"),
-		SessionSecret:    getenv("SESSION_SECRET", "dev-change-me"),
+		Addr:             getenv("ADDR", ":12129"),
+		SessionSecret:    getenv("SESSION_SECRET", secret),
 		DBPath:           getenv("DB_PATH", "./app.db"),
 		OllamaURL:        getenv("OLLAMA_URL", "http://ollama:11434"),
 		OllamaTimeout:    durationMinutes("OLLAMA_TIMEOUT", 5),
@@ -45,7 +69,6 @@ func Load() Config {
 		OIDCClientID:     getenv("OIDC_CLIENT_ID", ""),
 		OIDCClientSecret: getenv("OIDC_CLIENT_SECRET", ""),
 		OIDCRedirectURL:  getenv("OIDC_REDIRECT_URL", "/auth/callback"),
-		AllowedEmails:    csvSet(getenv("ALLOWED_EMAILS", "")),
 	}
 }
 
@@ -152,15 +175,4 @@ func parseEnvValue(value string) string {
 		value = strings.TrimSpace(value[:i])
 	}
 	return value
-}
-
-func csvSet(s string) map[string]bool {
-	m := map[string]bool{}
-	for _, p := range strings.Split(s, ",") {
-		p = strings.TrimSpace(strings.ToLower(p))
-		if p != "" {
-			m[p] = true
-		}
-	}
-	return m
 }
