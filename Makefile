@@ -1,5 +1,5 @@
 APP_NAME ?= chattone
-APP_DISPLAY_NAME ?=ChatTone
+APP_DISPLAY_NAME ?= ChatTone
 APP_BUNDLE_ID ?= it.billnice.chattone
 CMD ?= ./cmd/server
 DIST_DIR ?= dist
@@ -20,11 +20,13 @@ ICON_ICO ?= assets/logo.ico
 all: release
 
 icons:
-	GOCACHE=$(GO_CACHE_DIR) go run ./tools/icongen
+	@echo "generating icons"
+	@GOCACHE=$(GO_CACHE_DIR) go run ./tools/icongen
 
 build:
-	mkdir -p $(BIN_DIR)
-	GOCACHE=$(GO_CACHE_DIR) CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(BIN_DIR)/$(APP_NAME) $(CMD)
+	@echo "building $(BIN_DIR)/$(APP_NAME)"
+	@mkdir -p $(BIN_DIR)
+	@GOCACHE=$(GO_CACHE_DIR) CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(BIN_DIR)/$(APP_NAME) $(CMD)
 
 build-mac: icons build-darwin-amd64 build-darwin-arm64
 
@@ -53,21 +55,23 @@ build-windows-arm64:
 	$(call package_binary,windows,arm64)
 
 checksums:
-	cd $(DIST_DIR) && shasum -a 256 *.tar.gz *.zip > checksums.txt
+	@echo "writing checksums"
+	@cd $(DIST_DIR) && shasum -a 256 *.tar.gz *.zip > checksums.txt
 
 clean:
-	rm -rf $(BIN_DIR) $(DIST_DIR)
+	@echo "cleaning build outputs"
+	@rm -rf $(BIN_DIR) $(DIST_DIR)
 
 define package_binary
-	mkdir -p $(DIST_DIR)
-	os="$(1)"; \
+	@mkdir -p $(DIST_DIR)
+	@os="$(1)"; \
 	arch="$(2)"; \
 	ext=""; \
 	if [ "$$os" = "windows" ]; then ext=".exe"; fi; \
 	name="$(APP_NAME)_$(VERSION)_$${os}_$${arch}"; \
 	work="$(DIST_DIR)/$${name}"; \
 	mkdir -p "$$work"; \
-	echo "building $$name"; \
+	echo "building release asset $$name"; \
 	GOCACHE=$(GO_CACHE_DIR) CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags="$(LDFLAGS)" -o "$$work/$(APP_NAME)$${ext}" $(CMD); \
 	cp README.md "$$work/"; \
 	cp .env.example "$$work/"; \
