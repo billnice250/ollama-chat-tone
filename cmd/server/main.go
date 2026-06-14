@@ -182,9 +182,14 @@ func main() {
 		auth.WriteJSON(w, res)
 	})))
 
-	log.Printf("%s running at %s", cfg.AppName, appURL(cfg.Addr))
-	log.Printf("listening on %s auth=%s ollama=%s", cfg.Addr, cfg.AuthMode(), cfg.OllamaURL)
-	log.Fatal(http.ListenAndServe(cfg.Addr, requestLogger(mux)))
+	listener, err := net.Listen("tcp", cfg.Addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	actualAddr := listener.Addr().String()
+	log.Printf("%s running at %s", cfg.AppName, appURL(actualAddr))
+	log.Printf("listening on %s configured=%s auth=%s ollama=%s", actualAddr, cfg.Addr, cfg.AuthMode(), cfg.OllamaURL)
+	log.Fatal(http.Serve(listener, requestLogger(mux)))
 }
 
 func contextBackground() context.Context { return context.Background() }

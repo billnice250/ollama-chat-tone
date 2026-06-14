@@ -2,6 +2,8 @@ package config
 
 import (
 	"bufio"
+	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -52,6 +54,21 @@ func (c Config) AuthMode() string {
 		return "local"
 	}
 	return "none"
+}
+
+func (c Config) Validate() error {
+	_, port, err := net.SplitHostPort(c.Addr)
+	if err != nil {
+		return fmt.Errorf("ADDR must be in host:port form: %w", err)
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil {
+		return fmt.Errorf("ADDR port must be numeric: %w", err)
+	}
+	if portNumber == 0 {
+		return fmt.Errorf("ADDR must not use port 0")
+	}
+	return nil
 }
 
 func dotenv(paths ...string) {
