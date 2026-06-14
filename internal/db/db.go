@@ -34,6 +34,20 @@ type Message struct {
 	CreatedAt      string `json:"createdAt"`
 }
 
+type ChatJob struct {
+	ID             string `json:"id"`
+	ConversationID string `json:"conversationId"`
+	UserEmail      string `json:"-"`
+	Status         string `json:"status"`
+	Content        string `json:"content"`
+	Thinking       string `json:"thinking,omitempty"`
+	Model          string `json:"model,omitempty"`
+	Error          string `json:"error,omitempty"`
+	MessageID      int64  `json:"messageId,omitempty"`
+	CreatedAt      string `json:"createdAt"`
+	UpdatedAt      string `json:"updatedAt"`
+}
+
 type User struct {
 	Username     string `json:"username"`
 	PasswordHash string `json:"-"`
@@ -70,6 +84,19 @@ CREATE TABLE IF NOT EXISTS users (
   approved INTEGER NOT NULL DEFAULT 0,
   is_admin INTEGER NOT NULL DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS chat_jobs (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  user_email TEXT NOT NULL,
+  status TEXT NOT NULL,
+  content TEXT NOT NULL DEFAULT '',
+  thinking TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT '',
+  message_id INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );`)
 	if err != nil {
 		return nil, err
@@ -87,6 +114,7 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE messages ADD COLUMN model TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE users ADD COLUMN approved INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE chat_jobs ADD COLUMN message_id INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil && !isDuplicateColumn(err) {
@@ -311,6 +339,9 @@ func (s *Store) DeleteConversation(ctx context.Context, user, id string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE conversation_id = ?`, id); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM chat_jobs WHERE conversation_id = ?`, id); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -326,6 +357,115 @@ WHERE c.user_email = ? AND m.conversation_id = ? AND m.id = ?`, user, conversati
 		return nil, err
 	}
 	return &m, nil
+}
+
+func (s *Store) CreateChatJob(ctx context.Context, user, conversationID, model string) (*ChatJob, error) {
+	var exists int
+	if err := s.DB.QueryRowContext(ctx, `SELECT 1 FROM conversations WHERE user_email = ? AND id = ?`, user, conversationID).Scan(&exists); err != nil {
+		return nil, err
+	}
+	id := newID()
+	_, err := s.DB.ExecContext(ctx, `
+INSERT INTO chat_jobs (id, conversation_id, user_email, status, model, created_at, updated_at)
+VALUES (?, ?, ?, 'running', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, id, conversationID, user, model)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetChatJob(ctx, user, conversationID, id)
+}
+
+func (s *Store) GetChatJob(ctx context.Context, user, conversationID, id string) (*ChatJob, error) {
+	var j ChatJob
+	err := s.DB.QueryRowContext(ctx, `
+SELECT id, conversation_id, user_email, status, content, thinking, model, error, message_id, created_at, updated_at
+FROM chat_jobs
+WHERE user_email = ? AND conversation_id = ? AND id = ?`, user, conversationID, id).
+		Scan(&j.ID, &j.ConversationID, &j.UserEmail, &j.Status, &j.Content, &j.Thinking, &j.Model, &j.Error, &j.MessageID, &j.CreatedAt, &j.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &j, nil
+}
+
+func (s *Store) ActiveChatJob(ctx context.Context, user, conversationID string) (*ChatJob, error) {
+	var j ChatJob
+	err := s.DB.QueryRowContext(ctx, `
+SELECT id, conversation_id, user_email, status, content, thinking, model, error, message_id, created_at, updated_at
+FROM chat_jobs
+WHERE user_email = ? AND conversation_id = ? AND status = 'running'
+ORDER BY updated_at DESC, created_at DESC
+LIMIT 1`, user, conversationID).
+		Scan(&j.ID, &j.ConversationID, &j.UserEmail, &j.Status, &j.Content, &j.Thinking, &j.Model, &j.Error, &j.MessageID, &j.CreatedAt, &j.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &j, nil
+}
+
+func (s *Store) UpdateChatJob(ctx context.Context, user, conversationID, id, content, thinking string) error {
+	_, err := s.DB.ExecContext(ctx, `
+UPDATE chat_jobs
+SET content = ?, thinking = ?, updated_at = CURRENT_TIMESTAMP
+WHERE user_email = ? AND conversation_id = ? AND id = ? AND status = 'running'`, content, thinking, user, conversationID, id)
+	return err
+}
+
+func (s *Store) CompleteChatJob(ctx context.Context, user, conversationID, id, content, thinking, model string) (*Message, error) {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.ExecContext(ctx, `
+INSERT INTO messages (conversation_id, role, content, thinking, model, created_at)
+VALUES (?, 'assistant', ?, ?, ?, CURRENT_TIMESTAMP)`, conversationID, content, thinking, model)
+	if err != nil {
+		return nil, err
+	}
+	messageID, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE chat_jobs
+SET status = 'complete', content = ?, thinking = ?, model = ?, message_id = ?, updated_at = CURRENT_TIMESTAMP
+WHERE user_email = ? AND conversation_id = ? AND id = ?`, content, thinking, model, messageID, user, conversationID, id); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE user_email = ? AND id = ?`, user, conversationID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return s.GetMessage(ctx, user, conversationID, messageID)
+}
+
+func (s *Store) FailChatJob(ctx context.Context, user, conversationID, id, message string) error {
+	_, err := s.DB.ExecContext(ctx, `
+UPDATE chat_jobs
+SET status = 'error', error = ?, updated_at = CURRENT_TIMESTAMP
+WHERE user_email = ? AND conversation_id = ? AND id = ? AND status = 'running'`, message, user, conversationID, id)
+	return err
+}
+
+func (s *Store) CancelChatJob(ctx context.Context, user, conversationID, id string) error {
+	res, err := s.DB.ExecContext(ctx, `
+UPDATE chat_jobs
+SET status = 'canceled', updated_at = CURRENT_TIMESTAMP
+WHERE user_email = ? AND conversation_id = ? AND id = ? AND status = 'running'`, user, conversationID, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func newID() string {

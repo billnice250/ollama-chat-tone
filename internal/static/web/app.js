@@ -11,6 +11,7 @@ const el = {
 	chatMeta: document.getElementById('chat-meta'),
 	messages: document.getElementById('messages'),
 	model: document.getElementById('model'),
+	thinkToggle: document.getElementById('think-toggle'),
 	refreshModels: document.getElementById('refresh-models'),
 	adminLink: document.getElementById('admin-link'),
 	error: document.getElementById('error'),
@@ -30,6 +31,8 @@ const state = {
 	activeChatId: '',
 	chats: [],
 	streamController: null,
+	activeJob: null,
+	jobPollTimer: 0,
 };
 
 function showError(message) {
@@ -179,7 +182,14 @@ function messageNode(message) {
 
 	const content = document.createElement('div');
 	content.className = 'markdown-body';
-	content.append(...renderMarkdown(message.content || 'Thinking...'));
+	if (message.pending && !message.content) {
+		const thinking = document.createElement('span');
+		thinking.className = 'thinking-animation';
+		thinking.textContent = 'Thinking';
+		content.append(thinking);
+	} else {
+		content.append(...renderMarkdown(message.content || ''));
+	}
 	bubble.append(content);
 	row.append(bubble);
 	return row;
@@ -563,8 +573,13 @@ function store() {
 
 async function selectChat(id) {
 	clearError();
+	stopJobPolling();
+	state.activeJob = null;
+	setStreaming(false);
 	try {
 		await store().loadChat(id);
+		const chat = activeChat();
+		await attachActiveJob(chat);
 		closeMobileSidebar();
 		render();
 	} catch (err) {
@@ -607,10 +622,135 @@ function setStreaming(streaming) {
 	el.prompt.disabled = streaming;
 }
 
+function stopJobPolling() {
+	if (state.jobPollTimer) {
+		clearTimeout(state.jobPollTimer);
+		state.jobPollTimer = 0;
+	}
+}
+
 function chatMessages(chat) {
 	return (chat.messages || [])
 		.filter((message) => !message.pending)
 		.map((message) => ({ role: message.role, content: message.content }));
+}
+
+function pendingAssistant(chat, job) {
+	let assistant = (chat.messages || []).find((message) => message.pending && message.jobId === job.id);
+	if (!assistant) {
+		assistant = {
+			role: 'assistant',
+			content: job.content || '',
+			thinking: job.thinking || '',
+			model: job.model || selectedModel(),
+			pending: true,
+			jobId: job.id,
+		};
+		chat.messages = chat.messages || [];
+		chat.messages.push(assistant);
+	}
+	return assistant;
+}
+
+async function startServerJob(chat, model, assistant) {
+	const data = await fetchJSON(`/api/conversations/${encodeURIComponent(chat.id)}/jobs`, {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify({
+			model,
+			messages: chatMessages(chat),
+			think: el.thinkToggle.checked,
+		}),
+	});
+	const job = data.job;
+	assistant.jobId = job.id;
+	assistant.model = job.model || model;
+	assistant.content = job.content || assistant.content || '';
+	assistant.thinking = job.thinking || assistant.thinking || '';
+	state.activeJob = { conversationId: chat.id, id: job.id };
+	setStreaming(true);
+	render();
+	pollServerJob(chat, job.id, assistant);
+}
+
+async function attachActiveJob(chat) {
+	if (state.storageMode !== 'server' || !chat?.id) {
+		return;
+	}
+	const data = await fetchJSON(`/api/conversations/${encodeURIComponent(chat.id)}/jobs/active`);
+	if (!data.job) {
+		return;
+	}
+	const assistant = pendingAssistant(chat, data.job);
+	state.activeJob = { conversationId: chat.id, id: data.job.id };
+	setStreaming(true);
+	render();
+	pollServerJob(chat, data.job.id, assistant);
+}
+
+function pollServerJob(chat, jobId, assistant) {
+	stopJobPolling();
+	state.jobPollTimer = window.setTimeout(async () => {
+		try {
+			const data = await fetchJSON(`/api/conversations/${encodeURIComponent(chat.id)}/jobs/${encodeURIComponent(jobId)}`);
+			const job = data.job;
+			assistant.content = job.content || '';
+			assistant.thinking = job.thinking || '';
+			assistant.model = job.model || assistant.model;
+			el.appStatus.textContent = assistant.content ? `Streaming from ${assistant.model}` : `${assistant.model} is thinking...`;
+
+			if (job.status === 'running') {
+				if (state.activeChatId === chat.id) {
+					render();
+				}
+				pollServerJob(chat, jobId, assistant);
+				return;
+			}
+
+			assistant.pending = false;
+			state.activeJob = null;
+			setStreaming(false);
+			el.appStatus.textContent = `Model: ${assistant.model}`;
+			if (job.status === 'complete') {
+				await store().loadChat(chat.id);
+			} else if (job.status === 'canceled') {
+				assistant.content = assistant.content ? `${assistant.content}\n\n[stopped]` : '[stopped]';
+			} else if (job.status === 'error') {
+				assistant.content = `Error: ${job.error || 'generation failed'}`;
+				showError(job.error || 'generation failed');
+			}
+			render();
+		} catch (err) {
+			state.activeJob = null;
+			setStreaming(false);
+			assistant.pending = false;
+			assistant.content = `Error: ${err.message}`;
+			showError(err.message);
+			render();
+		}
+	}, 750);
+}
+
+async function cancelServerJob() {
+	if (!state.activeJob) {
+		return;
+	}
+	const job = state.activeJob;
+	await fetchJSON(`/api/conversations/${encodeURIComponent(job.conversationId)}/jobs/${encodeURIComponent(job.id)}/cancel`, {
+		method: 'POST',
+	});
+	stopJobPolling();
+	state.activeJob = null;
+	setStreaming(false);
+	const chat = activeChat();
+	if (chat?.id === job.conversationId) {
+		const assistant = (chat.messages || []).find((message) => message.pending && message.jobId === job.id);
+		if (assistant) {
+			assistant.pending = false;
+			assistant.content = assistant.content ? `${assistant.content}\n\n[stopped]` : '[stopped]';
+		}
+		render();
+	}
 }
 
 async function fetchStream(url, options, onChunk) {
@@ -731,14 +871,30 @@ async function send(content) {
 	chat.messages.push(assistant);
 	render();
 
+	if (state.storageMode === 'server') {
+		try {
+			await startServerJob(chat, currentModel, assistant);
+		} catch (err) {
+			assistant.pending = false;
+			assistant.content = `Error: ${err.message}`;
+			showError(err.message);
+			render();
+			setStreaming(false);
+		} finally {
+			state.streamController = null;
+			el.prompt.focus();
+		}
+		return;
+	}
+
 	try {
 		await fetchStream('/api/chat', {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			signal: state.streamController.signal,
-			body: JSON.stringify({ model: currentModel, messages: chatMessages(chat), stream: true }),
+			body: JSON.stringify({ model: currentModel, messages: chatMessages(chat), stream: true, think: el.thinkToggle.checked }),
 		}, (chunk) => {
-			if (chunk.message?.thinking) {
+			if (el.thinkToggle.checked && chunk.message?.thinking) {
 				assistant.thinking += chunk.message.thinking;
 				el.appStatus.textContent = `${currentModel} is thinking...`;
 			}
@@ -800,6 +956,10 @@ el.refreshModels.addEventListener('click', () => {
 
 el.composer.addEventListener('submit', (event) => {
 	event.preventDefault();
+	if (state.activeJob) {
+		cancelServerJob().catch((err) => showError(err.message));
+		return;
+	}
 	if (state.streamController) {
 		state.streamController.abort();
 		return;
@@ -810,6 +970,9 @@ el.composer.addEventListener('submit', (event) => {
 el.prompt.addEventListener('keydown', (event) => {
 	if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
 		event.preventDefault();
+		if (state.activeJob || state.streamController) {
+			return;
+		}
 		send(el.prompt.value.trim()).catch((err) => showError(err.message));
 	}
 });
@@ -823,6 +986,7 @@ async function boot() {
 	if (state.chats.length === 0) {
 		await createChat();
 	} else {
+		await attachActiveJob(activeChat());
 		render();
 	}
 }

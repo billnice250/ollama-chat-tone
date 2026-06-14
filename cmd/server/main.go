@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/billnice250/ollama-chat-tone/internal/auth"
 	"github.com/billnice250/ollama-chat-tone/internal/config"
@@ -33,6 +34,7 @@ func main() {
 		log.Fatal(err)
 	}
 	oc := ollama.New(cfg.OllamaURL, cfg.OllamaTimeout)
+	jobs := newJobManager()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })
@@ -136,7 +138,7 @@ func main() {
 			writeError(w, http.StatusForbidden, "anonymous chats are stored in local browser storage")
 			return
 		}
-		handleConversation(w, r, store, user)
+		handleConversation(w, r, store, oc, jobs, user)
 	})))
 	mux.Handle("/api/models", authm.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -242,7 +244,37 @@ func isAdmin(r *http.Request) bool {
 	return v
 }
 
-func handleConversation(w http.ResponseWriter, r *http.Request, store *db.Store, user string) {
+type jobManager struct {
+	mu      sync.Mutex
+	cancels map[string]context.CancelFunc
+}
+
+func newJobManager() *jobManager {
+	return &jobManager{cancels: map[string]context.CancelFunc{}}
+}
+
+func (m *jobManager) add(id string, cancel context.CancelFunc) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cancels[id] = cancel
+}
+
+func (m *jobManager) remove(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.cancels, id)
+}
+
+func (m *jobManager) cancel(id string) {
+	m.mu.Lock()
+	cancel := m.cancels[id]
+	m.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func handleConversation(w http.ResponseWriter, r *http.Request, store *db.Store, oc *ollama.Client, jobs *jobManager, user string) {
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/conversations/"), "/")
 	parts := strings.Split(path, "/")
 	if len(parts) == 0 || parts[0] == "" {
@@ -290,6 +322,11 @@ func handleConversation(w http.ResponseWriter, r *http.Request, store *db.Store,
 		return
 	}
 
+	if len(parts) >= 2 && parts[1] == "jobs" {
+		handleChatJob(w, r, store, oc, jobs, user, conversationID, parts[2:])
+		return
+	}
+
 	if len(parts) == 2 && parts[1] == "messages" {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -320,6 +357,111 @@ func handleConversation(w http.ResponseWriter, r *http.Request, store *db.Store,
 	}
 
 	writeError(w, http.StatusNotFound, "conversation not found")
+}
+
+func handleChatJob(w http.ResponseWriter, r *http.Request, store *db.Store, oc *ollama.Client, jobs *jobManager, user, conversationID string, parts []string) {
+	if len(parts) == 0 {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var req struct {
+			Model    string           `json:"model"`
+			Messages []ollama.Message `json:"messages"`
+			Think    bool             `json:"think"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad request")
+			return
+		}
+		if req.Model == "" {
+			req.Model = "unknown"
+		}
+		if _, err := store.ActiveChatJob(r.Context(), user, conversationID); err == nil {
+			writeError(w, http.StatusConflict, "conversation already has a running response")
+			return
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		job, err := store.CreateChatJob(r.Context(), user, conversationID, req.Model)
+		if err != nil {
+			writeDBError(w, err, "conversation not found")
+			return
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		jobs.add(job.ID, cancel)
+		go runChatJob(ctx, store, oc, jobs, user, conversationID, job.ID, req.Model, req.Messages, req.Think)
+		auth.WriteJSON(w, map[string]any{"job": job})
+		return
+	}
+
+	if len(parts) == 1 && parts[0] == "active" {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		job, err := store.ActiveChatJob(r.Context(), user, conversationID)
+		if errors.Is(err, sql.ErrNoRows) {
+			auth.WriteJSON(w, map[string]any{"job": nil})
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		auth.WriteJSON(w, map[string]any{"job": job})
+		return
+	}
+
+	if len(parts) >= 1 {
+		jobID := parts[0]
+		if len(parts) == 1 && r.Method == http.MethodGet {
+			job, err := store.GetChatJob(r.Context(), user, conversationID, jobID)
+			if err != nil {
+				writeDBError(w, err, "job not found")
+				return
+			}
+			auth.WriteJSON(w, map[string]any{"job": job})
+			return
+		}
+		if len(parts) == 2 && parts[1] == "cancel" && r.Method == http.MethodPost {
+			jobs.cancel(jobID)
+			if err := store.CancelChatJob(r.Context(), user, conversationID, jobID); err != nil {
+				writeDBError(w, err, "job not found")
+				return
+			}
+			auth.WriteJSON(w, map[string]any{"canceled": true})
+			return
+		}
+	}
+
+	writeError(w, http.StatusNotFound, "job not found")
+}
+
+func runChatJob(ctx context.Context, store *db.Store, oc *ollama.Client, jobs *jobManager, user, conversationID, jobID, model string, messages []ollama.Message, think bool) {
+	defer jobs.remove(jobID)
+	content := ""
+	thinking := ""
+	req := ollama.ChatRequest{Model: model, Messages: messages, Stream: true, Think: &think}
+	err := oc.StreamChat(ctx, req, func(chunk ollama.ChatResponse) error {
+		content += chunk.Message.Content
+		if think {
+			thinking += chunk.Message.Thinking
+		}
+		return store.UpdateChatJob(context.Background(), user, conversationID, jobID, content, thinking)
+	})
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			_ = store.CancelChatJob(context.Background(), user, conversationID, jobID)
+			return
+		}
+		_ = store.FailChatJob(context.Background(), user, conversationID, jobID, err.Error())
+		return
+	}
+	if _, err := store.CompleteChatJob(context.Background(), user, conversationID, jobID, content, thinking, model); err != nil {
+		_ = store.FailChatJob(context.Background(), user, conversationID, jobID, err.Error())
+	}
 }
 
 func writeDBError(w http.ResponseWriter, err error, notFound string) {

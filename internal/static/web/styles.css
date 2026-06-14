@@ -335,6 +335,28 @@ select {
 	font-weight: 650;
 }
 
+.think-toggle {
+	height: 36px;
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	padding: 0 10px;
+	border: 1px solid var(--color-line);
+	border-radius: var(--radius);
+	background: var(--color-surface);
+	color: var(--color-accent-strong);
+	font-size: 14px;
+	font-weight: 650;
+	cursor: pointer;
+}
+
+.think-toggle input {
+	width: 15px;
+	height: 15px;
+	margin: 0;
+	accent-color: var(--color-accent);
+}
+
 .logout,
 .admin-link {
 	color: var(--color-accent-strong);
@@ -452,6 +474,35 @@ select {
 
 .thinking-content {
 	display: block;
+}
+
+.thinking-animation {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	color: var(--color-muted);
+}
+
+.thinking-animation::after {
+	content: "";
+	width: 1.7em;
+	animation: thinkingDots 1.2s steps(4, end) infinite;
+}
+
+@keyframes thinkingDots {
+	0% {
+		content: "";
+	}
+	25% {
+		content: ".";
+	}
+	50% {
+		content: "..";
+	}
+	75%,
+	100% {
+		content: "...";
+	}
 }
 
 .markdown-body {
@@ -799,6 +850,7 @@ textarea::placeholder {
 	}
 
 	select,
+	.think-toggle,
 	.secondary-button {
 		width: 100%;
 		min-width: 0;

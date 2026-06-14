@@ -71,6 +71,7 @@ func Load() Config {
 		OIDCClientID:     getenv("OIDC_CLIENT_ID", ""),
 		OIDCClientSecret: getenv("OIDC_CLIENT_SECRET", ""),
 		OIDCRedirectURL:  getenv("OIDC_REDIRECT_URL", "/auth/callback"),
+		AllowedEmails:    csvSet(getenv("ALLOWED_EMAILS", "")),
 	}
 }
 
@@ -188,4 +189,15 @@ func parseEnvValue(value string) string {
 		value = strings.TrimSpace(value[:i])
 	}
 	return value
+}
+
+func csvSet(s string) map[string]bool {
+	m := map[string]bool{}
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(strings.ToLower(p))
+		if p != "" {
+			m[p] = true
+		}
+	}
+	return m
 }
