@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"html"
 	"net/http"
 	"strings"
 
@@ -50,13 +51,13 @@ func (m *Manager) RequireAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), EmailKey, "anonymous")))
 		case "basic":
 			if readCookie(r, basicLoggedOutCookie) == "1" {
-				w.Header().Set("WWW-Authenticate", `Basic realm="ollama-chat"`)
+				w.Header().Set("WWW-Authenticate", basicRealm(m.cfg.AppName))
 				http.Error(w, "logged out", http.StatusUnauthorized)
 				return
 			}
 			u, p, ok := r.BasicAuth()
 			if !ok || u != m.cfg.BasicUser || p != m.cfg.BasicPass {
-				w.Header().Set("WWW-Authenticate", `Basic realm="ollama-chat"`)
+				w.Header().Set("WWW-Authenticate", basicRealm(m.cfg.AppName))
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
@@ -130,7 +131,8 @@ func (m *Manager) Logout(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, &http.Cookie{Name: basicLoggedOutCookie, Value: "1", Path: "/", MaxAge: 86400 * 30, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`<!doctype html><title>Logged out</title><body style="font-family:system-ui;margin:40px"><h1>Logged out</h1><p>You are logged out of Ollama Chat.</p><p><a href="/auth/login">Log in again</a></p></body>`))
+		name := html.EscapeString(m.cfg.AppName)
+		_, _ = w.Write([]byte(`<!doctype html><title>Logged out</title><body style="font-family:system-ui;margin:40px"><h1>Logged out</h1><p>You are logged out of ` + name + `.</p><p><a href="/auth/login">Log in again</a></p></body>`))
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusFound)
@@ -158,4 +160,10 @@ func randomState() string {
 func WriteJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
+}
+
+func basicRealm(name string) string {
+	name = strings.ReplaceAll(name, `\`, `\\`)
+	name = strings.ReplaceAll(name, `"`, `\"`)
+	return `Basic realm="` + name + `"`
 }

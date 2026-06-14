@@ -31,6 +31,7 @@
 		select{min-width:210px}
 		.custom-model{width:160px}
 		.logout{color:var(--accent-2);font-size:14px;text-decoration:none;font-weight:650}
+		.refresh-models{height:36px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--accent-2);font-weight:650}
 		.messages{overflow:auto;padding:28px 20px;background:linear-gradient(180deg,#f9fafb 0%,#eef2f6 100%)}
 		.empty{height:100%;display:grid;place-items:center;text-align:center;color:var(--muted)}
 		.empty strong{display:block;color:var(--text);font-size:24px;margin-bottom:6px}
@@ -70,7 +71,7 @@
 	<div class="app">
 		<aside class="sidebar">
 			<div class="brand">
-				<h1>Ollama Chat</h1>
+				<h1 id="app-name">Ollama Chat</h1>
 				<p id="app-status">Loading models...</p>
 			</div>
 			<button id="new-chat" class="new-chat" type="button">New chat</button>
@@ -85,6 +86,7 @@
 				</div>
 				<div class="controls">
 					<select id="model" aria-label="Model"></select>
+					<button id="refresh-models" class="refresh-models" type="button">Refresh</button>
 					<input id="custom-model" class="custom-model" placeholder="custom model">
 					<a class="logout" href="/auth/logout">Logout</a>
 				</div>
@@ -105,12 +107,14 @@
 
 	<script>
 		const storageKey = 'ollama-chat-client.chats.v1';
+		const appName = document.getElementById('app-name');
 		const chatList = document.getElementById('chat-list');
 		const messagesEl = document.getElementById('messages');
 		const chatTitle = document.getElementById('chat-title');
 		const chatMeta = document.getElementById('chat-meta');
 		const appStatus = document.getElementById('app-status');
 		const model = document.getElementById('model');
+		const refreshModelsButton = document.getElementById('refresh-models');
 		const customModel = document.getElementById('custom-model');
 		const errorEl = document.getElementById('error');
 		const promptEl = document.getElementById('prompt');
@@ -119,6 +123,7 @@
 		const newChatButton = document.getElementById('new-chat');
 
 		let defaultModel = 'llama3.2';
+		let configuredAppName = 'Ollama Chat';
 		let activeChatId = '';
 		let chats = loadChats();
 		let streamController = null;
@@ -317,30 +322,39 @@
 
 		async function loadConfig() {
 			const cfg = await fetchJSON('/api/config');
+			configuredAppName = cfg.appName || configuredAppName;
+			document.title = configuredAppName;
+			appName.textContent = configuredAppName;
 			defaultModel = cfg.defaultModel || defaultModel;
 		}
 
 		async function loadModels() {
+			refreshModelsButton.disabled = true;
+			appStatus.textContent = 'Loading models...';
 			await loadConfig();
-			const data = await fetchJSON('/api/models');
-			model.replaceChildren();
+			try {
+				const data = await fetchJSON('/api/models');
+				model.replaceChildren();
 
-			const names = [...new Set((data.models || []).map((m) => m.name).filter(Boolean))];
-			if (!names.includes(defaultModel)) {
-				names.unshift(defaultModel);
+				const names = [...new Set((data.models || []).map((m) => m.name).filter(Boolean))].sort();
+				if (!names.includes(defaultModel)) {
+					names.unshift(defaultModel);
+				}
+
+				for (const name of names) {
+					const option = document.createElement('option');
+					option.value = name;
+					option.textContent = name;
+					option.selected = name === defaultModel;
+					model.append(option);
+				}
+
+				appStatus.textContent = names.length === 1
+					? `Model: ${names[0]}`
+					: `${names.length} models available`;
+			} finally {
+				refreshModelsButton.disabled = false;
 			}
-
-			for (const name of names) {
-				const option = document.createElement('option');
-				option.value = name;
-				option.textContent = name;
-				option.selected = name === defaultModel;
-				model.append(option);
-			}
-
-			appStatus.textContent = names.length === 1
-				? `Model: ${names[0]}`
-				: `${names.length} models available`;
 		}
 
 		async function send(content) {
@@ -426,6 +440,10 @@
 		}
 
 		newChatButton.addEventListener('click', createChat);
+		refreshModelsButton.addEventListener('click', () => {
+			clearError();
+			loadModels().catch((err) => showError(`Could not load models: ${err.message}`));
+		});
 		composer.addEventListener('submit', (event) => {
 			event.preventDefault();
 			if (streamController) {

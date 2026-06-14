@@ -43,6 +43,7 @@ func main() {
 			return
 		}
 		auth.WriteJSON(w, map[string]any{
+			"appName":      cfg.AppName,
 			"defaultModel": cfg.DefaultModel,
 			"authMode":     cfg.AuthMode(),
 		})
@@ -94,7 +95,7 @@ func main() {
 		auth.WriteJSON(w, res)
 	})))
 
-	log.Printf("app running at %s", appURL(cfg.BaseURL, cfg.Addr))
+	log.Printf("%s running at %s", cfg.AppName, appURL(cfg.BaseURL, cfg.Addr))
 	log.Printf("listening on %s auth=%s ollama=%s", cfg.Addr, cfg.AuthMode(), cfg.OllamaURL)
 	log.Fatal(http.ListenAndServe(cfg.Addr, requestLogger(mux)))
 }

@@ -8,6 +8,7 @@ import (
 )
 
 type Config struct {
+	AppName       string
 	Addr          string
 	BaseURL       string
 	SessionSecret string
@@ -28,6 +29,7 @@ type Config struct {
 func Load() Config {
 	dotenv(".env")
 	return Config{
+		AppName:          getenv("APP_NAME", "Ollama Chat"),
 		Addr:             getenv("ADDR", ":8080"),
 		BaseURL:          getenv("BASE_URL", "http://localhost:8080"),
 		SessionSecret:    getenv("SESSION_SECRET", "dev-change-me"),
