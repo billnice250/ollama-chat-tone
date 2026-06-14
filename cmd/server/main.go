@@ -26,7 +26,7 @@ func main() {
 	}
 	defer store.DB.Close()
 
-	authm, err := auth.New(contextBackground(), cfg)
+	authm, err := auth.New(contextBackground(), cfg, store)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -35,6 +35,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })
 	mux.HandleFunc("/auth/login", authm.Login)
+	mux.HandleFunc("/auth/signup", authm.Signup)
 	mux.HandleFunc("/auth/callback", authm.Callback)
 	mux.HandleFunc("/auth/logout", authm.Logout)
 	mux.Handle("/", authm.RequireAuth(http.FileServer(http.FS(staticFiles()))))
@@ -43,12 +44,52 @@ func main() {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
+		user := userFromRequest(r)
 		auth.WriteJSON(w, map[string]any{
 			"appName":      cfg.AppName,
 			"defaultModel": cfg.DefaultModel,
 			"authMode":     cfg.AuthMode(),
 			"storageMode":  storageMode(cfg.AuthMode()),
+			"currentUser":  user,
+			"isAdmin":      isAdmin(r),
 		})
+	})))
+	mux.Handle("/api/admin/users", authm.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isAdmin(r) {
+			writeError(w, http.StatusForbidden, "admin access required")
+			return
+		}
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		users, err := store.ListUsers(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		auth.WriteJSON(w, map[string]any{"users": users})
+	})))
+	mux.Handle("/api/admin/users/", authm.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isAdmin(r) {
+			writeError(w, http.StatusForbidden, "admin access required")
+			return
+		}
+		path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/users/"), "/")
+		username, action, ok := strings.Cut(path, "/")
+		if !ok || action != "approve" || username == "" {
+			writeError(w, http.StatusNotFound, "user not found")
+			return
+		}
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if err := store.ApproveUser(r.Context(), username); err != nil {
+			writeDBError(w, err, "user not found")
+			return
+		}
+		auth.WriteJSON(w, map[string]any{"approved": true})
 	})))
 	mux.Handle("/api/conversations", authm.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := userFromRequest(r)
@@ -161,6 +202,11 @@ func userFromRequest(r *http.Request) string {
 	return "anonymous"
 }
 
+func isAdmin(r *http.Request) bool {
+	v, _ := r.Context().Value(auth.AdminKey).(bool)
+	return v
+}
+
 func handleConversation(w http.ResponseWriter, r *http.Request, store *db.Store, user string) {
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/conversations/"), "/")
 	parts := strings.Split(path, "/")
@@ -197,6 +243,12 @@ func handleConversation(w http.ResponseWriter, r *http.Request, store *db.Store,
 				return
 			}
 			auth.WriteJSON(w, map[string]any{"conversation": conversation})
+		case http.MethodDelete:
+			if err := store.DeleteConversation(r.Context(), user, conversationID); err != nil {
+				writeDBError(w, err, "conversation not found")
+				return
+			}
+			auth.WriteJSON(w, map[string]any{"deleted": true})
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}

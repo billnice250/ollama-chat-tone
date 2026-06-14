@@ -3,12 +3,16 @@ const localStorageKey = 'ollama-chat-client.chats.v1';
 const el = {
 	appName: document.getElementById('app-name'),
 	appStatus: document.getElementById('app-status'),
+	currentUser: document.getElementById('current-user'),
+	sidebar: document.querySelector('.sidebar'),
+	sidebarToggle: document.getElementById('sidebar-toggle'),
 	chatList: document.getElementById('chat-list'),
 	chatTitle: document.getElementById('chat-title'),
 	chatMeta: document.getElementById('chat-meta'),
 	messages: document.getElementById('messages'),
 	model: document.getElementById('model'),
 	refreshModels: document.getElementById('refresh-models'),
+	adminLink: document.getElementById('admin-link'),
 	error: document.getElementById('error'),
 	prompt: document.getElementById('prompt'),
 	send: document.getElementById('send'),
@@ -21,6 +25,8 @@ const state = {
 	defaultModel: 'llama3.2',
 	authMode: 'none',
 	storageMode: 'local',
+	currentUser: 'anonymous',
+	isAdmin: false,
 	activeChatId: '',
 	chats: [],
 	streamController: null,
@@ -92,14 +98,28 @@ function renderEmptyShell() {
 
 function renderChatList() {
 	const items = state.chats.map((chat) => {
-		const button = document.createElement('button');
-		button.type = 'button';
-		button.className = `chat-item${chat.id === state.activeChatId ? ' active' : ''}`;
-		button.innerHTML = '<span class="chat-title"></span><span class="chat-count"></span>';
-		button.querySelector('.chat-title').textContent = chat.title;
-		button.querySelector('.chat-count').textContent = String(chat.messageCount || (chat.messages || []).length);
-		button.addEventListener('click', () => selectChat(chat.id));
-		return button;
+		const item = document.createElement('div');
+		item.className = `chat-item${chat.id === state.activeChatId ? ' active' : ''}`;
+
+		const selectButton = document.createElement('button');
+		selectButton.type = 'button';
+		selectButton.className = 'chat-select';
+		selectButton.innerHTML = '<span class="chat-title"></span><span class="chat-count"></span>';
+		selectButton.querySelector('.chat-title').textContent = chat.title;
+		selectButton.querySelector('.chat-count').textContent = String(chat.messageCount || (chat.messages || []).length);
+		selectButton.addEventListener('click', () => selectChat(chat.id));
+
+		const deleteButton = document.createElement('button');
+		deleteButton.type = 'button';
+		deleteButton.className = 'chat-delete';
+		deleteButton.textContent = 'Delete';
+		deleteButton.addEventListener('click', (event) => {
+			event.stopPropagation();
+			deleteChat(chat.id).catch((err) => showError(err.message));
+		});
+
+		item.append(selectButton, deleteButton);
+		return item;
 	});
 	el.chatList.replaceChildren(...items);
 }
@@ -226,6 +246,13 @@ const localStore = {
 		await this.save();
 		return saved;
 	},
+	async deleteChat(id) {
+		state.chats = state.chats.filter((chat) => chat.id !== id);
+		if (state.activeChatId === id) {
+			state.activeChatId = state.chats[0]?.id || '';
+		}
+		await this.save();
+	},
 	async save() {
 		localStorage.setItem(localStorageKey, JSON.stringify(state.chats.slice(0, 20)));
 	},
@@ -285,6 +312,16 @@ const serverStore = {
 		chat.messageCount = chat.messages.length;
 		return saved;
 	},
+	async deleteChat(id) {
+		await fetchJSON(`/api/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+		state.chats = state.chats.filter((chat) => chat.id !== id);
+		if (state.activeChatId === id) {
+			state.activeChatId = state.chats[0]?.id || '';
+			if (state.activeChatId) {
+				await this.loadChat(state.activeChatId);
+			}
+		}
+	},
 	async save() {},
 };
 
@@ -296,6 +333,7 @@ async function selectChat(id) {
 	clearError();
 	try {
 		await store().loadChat(id);
+		closeMobileSidebar();
 		render();
 	} catch (err) {
 		showError(err.message);
@@ -306,7 +344,29 @@ async function createChat() {
 	clearError();
 	const chat = await store().createChat();
 	state.activeChatId = chat.id;
+	closeMobileSidebar();
 	render();
+}
+
+async function deleteChat(id) {
+	const chat = state.chats.find((item) => item.id === id);
+	if (!chat) {
+		return;
+	}
+	if (!confirm(`Delete "${chat.title}"?`)) {
+		return;
+	}
+	await store().deleteChat(id);
+	if (state.chats.length === 0) {
+		await createChat();
+		return;
+	}
+	render();
+}
+
+function closeMobileSidebar() {
+	el.sidebar.classList.remove('open');
+	el.sidebarToggle.setAttribute('aria-expanded', 'false');
 }
 
 function setStreaming(streaming) {
@@ -373,8 +433,12 @@ async function loadConfig() {
 	state.defaultModel = cfg.defaultModel || state.defaultModel;
 	state.authMode = cfg.authMode || state.authMode;
 	state.storageMode = cfg.storageMode || (state.authMode === 'none' ? 'local' : 'server');
+	state.currentUser = cfg.currentUser || 'anonymous';
+	state.isAdmin = Boolean(cfg.isAdmin);
 	document.title = state.appName;
 	el.appName.textContent = state.appName;
+	el.currentUser.textContent = state.currentUser;
+	el.adminLink.classList.toggle('hidden', !state.isAdmin);
 }
 
 async function loadModels() {
@@ -490,6 +554,11 @@ async function send(content) {
 
 el.newChat.addEventListener('click', () => {
 	createChat().catch((err) => showError(err.message));
+});
+
+el.sidebarToggle.addEventListener('click', () => {
+	const open = el.sidebar.classList.toggle('open');
+	el.sidebarToggle.setAttribute('aria-expanded', String(open));
 });
 
 el.refreshModels.addEventListener('click', () => {

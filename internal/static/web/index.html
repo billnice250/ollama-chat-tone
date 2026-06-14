@@ -12,6 +12,7 @@
 			<div class="brand">
 				<h1 id="app-name">Ollama Chat</h1>
 				<p id="app-status">Loading models...</p>
+				<p id="current-user" class="current-user">anonymous</p>
 			</div>
 
 			<button id="new-chat" class="new-chat" type="button">New chat</button>
@@ -21,6 +22,7 @@
 		<main class="main">
 			<header class="topbar">
 				<div class="title">
+					<button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-expanded="false">Chats</button>
 					<h2 id="chat-title">New chat</h2>
 					<p id="chat-meta">No messages yet</p>
 				</div>
@@ -28,6 +30,7 @@
 				<div class="controls">
 					<select id="model" aria-label="Model"></select>
 					<button id="refresh-models" class="secondary-button" type="button">Refresh</button>
+					<a id="admin-link" class="admin-link hidden" href="/admin.html">Admin</a>
 					<a class="logout" href="/auth/logout">Logout</a>
 				</div>
 			</header>

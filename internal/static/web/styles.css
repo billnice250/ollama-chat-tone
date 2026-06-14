@@ -75,6 +75,12 @@ button {
 	font-size: 13px;
 }
 
+.current-user {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 .new-chat {
 	height: 38px;
 	margin: 14px 18px 16px;
@@ -96,6 +102,17 @@ button {
 	gap: 8px;
 	align-items: center;
 	margin: 3px 0;
+	border-radius: var(--radius);
+	background: transparent;
+	color: #e5e7eb;
+}
+
+.chat-select {
+	min-width: 0;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 8px;
+	align-items: center;
 	padding: 10px;
 	border-radius: var(--radius);
 	background: transparent;
@@ -106,6 +123,22 @@ button {
 .chat-item:hover,
 .chat-item.active {
 	background: rgba(255, 255, 255, .1);
+}
+
+.chat-delete {
+	height: 30px;
+	padding: 0 8px;
+	border-radius: 6px;
+	background: transparent;
+	color: #fca5a5;
+	font-size: 12px;
+	font-weight: 650;
+	opacity: .72;
+}
+
+.chat-delete:hover {
+	background: rgba(255, 255, 255, .1);
+	opacity: 1;
 }
 
 .chat-title {
@@ -140,6 +173,18 @@ button {
 
 .title {
 	min-width: 0;
+}
+
+.sidebar-toggle {
+	display: none;
+	height: 34px;
+	margin-bottom: 8px;
+	padding: 0 10px;
+	border: 1px solid var(--color-line);
+	border-radius: var(--radius);
+	background: var(--color-surface);
+	color: var(--color-accent-strong);
+	font-weight: 650;
 }
 
 .title h2 {
@@ -185,7 +230,8 @@ select {
 	font-weight: 650;
 }
 
-.logout {
+.logout,
+.admin-link {
 	color: var(--color-accent-strong);
 	font-size: 14px;
 	font-weight: 650;
@@ -348,23 +394,38 @@ textarea {
 @media (max-width: 760px) {
 	.app {
 		grid-template-columns: 1fr;
-		height: auto;
-		min-height: 100vh;
+		height: 100vh;
+		min-height: 0;
 	}
 
 	.sidebar {
-		max-height: 240px;
+		position: fixed;
+		z-index: 20;
+		inset: 0 auto 0 0;
+		width: min(86vw, var(--sidebar-width));
+		max-height: none;
+		transform: translateX(-100%);
+		transition: transform .18s ease;
 		border-right: 0;
-		border-bottom: 1px solid var(--color-line);
+		box-shadow: 0 20px 60px rgba(15, 23, 42, .35);
+	}
+
+	.sidebar.open {
+		transform: translateX(0);
 	}
 
 	.main {
-		min-height: calc(100vh - 240px);
+		min-height: 100vh;
 	}
 
 	.topbar {
 		align-items: flex-start;
 		flex-direction: column;
+	}
+
+	.sidebar-toggle {
+		display: inline-flex;
+		align-items: center;
 	}
 
 	.controls {
@@ -388,5 +449,103 @@ textarea {
 
 	.send {
 		width: 100%;
+	}
+}
+
+.admin-page {
+	min-height: 100vh;
+	padding: 24px;
+	background: var(--color-bg);
+}
+
+.admin-header,
+.admin-panel {
+	max-width: var(--content-width);
+	margin: 0 auto;
+}
+
+.admin-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 16px;
+	margin-bottom: 20px;
+}
+
+.admin-header h1 {
+	margin: 0;
+	font-size: 24px;
+}
+
+.admin-header p {
+	margin: 6px 0 0;
+	color: var(--color-muted);
+}
+
+.admin-nav {
+	display: flex;
+	gap: 12px;
+}
+
+.admin-nav a {
+	color: var(--color-accent-strong);
+	font-weight: 650;
+	text-decoration: none;
+}
+
+.admin-panel {
+	padding: 18px;
+	border: 1px solid var(--color-line);
+	border-radius: var(--radius);
+	background: var(--color-surface);
+}
+
+.admin-panel h2 {
+	margin: 0 0 14px;
+	font-size: 18px;
+}
+
+.users-list {
+	display: grid;
+	gap: 8px;
+}
+
+.user-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 10px;
+	border: 1px solid var(--color-line);
+	border-radius: var(--radius);
+}
+
+.user-meta {
+	min-width: 0;
+	display: grid;
+	gap: 3px;
+}
+
+.user-meta strong,
+.user-meta span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.user-meta span {
+	color: var(--color-muted);
+	font-size: 13px;
+}
+
+@media (max-width: 760px) {
+	.admin-page {
+		padding: 16px;
+	}
+
+	.admin-header,
+	.user-row {
+		flex-direction: column;
+		align-items: stretch;
 	}
 }

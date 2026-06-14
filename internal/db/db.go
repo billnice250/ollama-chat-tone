@@ -34,6 +34,14 @@ type Message struct {
 	CreatedAt      string `json:"createdAt"`
 }
 
+type User struct {
+	Username     string `json:"username"`
+	PasswordHash string `json:"-"`
+	Approved     bool   `json:"approved"`
+	IsAdmin      bool   `json:"isAdmin"`
+	CreatedAt    string `json:"createdAt"`
+}
+
 func Open(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -55,6 +63,13 @@ CREATE TABLE IF NOT EXISTS messages (
   thinking TEXT NOT NULL DEFAULT '',
   model TEXT NOT NULL DEFAULT '',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS users (
+  username TEXT PRIMARY KEY,
+  password_hash TEXT NOT NULL,
+  approved INTEGER NOT NULL DEFAULT 0,
+  is_admin INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );`)
 	if err != nil {
 		return nil, err
@@ -70,11 +85,85 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE conversations ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP`,
 		`ALTER TABLE messages ADD COLUMN thinking TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE messages ADD COLUMN model TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN approved INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil && !isDuplicateColumn(err) {
 			return err
 		}
+	}
+	return nil
+}
+
+func (s *Store) EnsureAdmin(ctx context.Context, username, passwordHash string) error {
+	if username == "" || passwordHash == "" {
+		return nil
+	}
+	_, err := s.DB.ExecContext(ctx, `
+INSERT INTO users (username, password_hash, approved, is_admin, created_at)
+VALUES (?, ?, 1, 1, CURRENT_TIMESTAMP)
+ON CONFLICT(username) DO UPDATE SET password_hash = excluded.password_hash, approved = 1, is_admin = 1`, username, passwordHash)
+	return err
+}
+
+func (s *Store) CreateUser(ctx context.Context, username, passwordHash string) error {
+	_, err := s.DB.ExecContext(ctx, `
+INSERT INTO users (username, password_hash, approved, is_admin, created_at)
+VALUES (?, ?, 0, 0, CURRENT_TIMESTAMP)`, username, passwordHash)
+	return err
+}
+
+func (s *Store) GetUser(ctx context.Context, username string) (*User, error) {
+	var u User
+	var approved, isAdmin int
+	err := s.DB.QueryRowContext(ctx, `
+SELECT username, password_hash, approved, is_admin, created_at
+FROM users
+WHERE username = ?`, username).Scan(&u.Username, &u.PasswordHash, &approved, &isAdmin, &u.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	u.Approved = approved == 1
+	u.IsAdmin = isAdmin == 1
+	return &u, nil
+}
+
+func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+SELECT username, password_hash, approved, is_admin, created_at
+FROM users
+ORDER BY is_admin DESC, approved ASC, created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []User
+	for rows.Next() {
+		var u User
+		var approved, isAdmin int
+		if err := rows.Scan(&u.Username, &u.PasswordHash, &approved, &isAdmin, &u.CreatedAt); err != nil {
+			return nil, err
+		}
+		u.Approved = approved == 1
+		u.IsAdmin = isAdmin == 1
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ApproveUser(ctx context.Context, username string) error {
+	res, err := s.DB.ExecContext(ctx, `UPDATE users SET approved = 1 WHERE username = ?`, username)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
 	}
 	return nil
 }
@@ -199,6 +288,30 @@ WHERE user_email = ? AND id = ?`, title, user, id)
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+func (s *Store) DeleteConversation(ctx context.Context, user, id string) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.ExecContext(ctx, `DELETE FROM conversations WHERE user_email = ? AND id = ?`, user, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE conversation_id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) GetMessage(ctx context.Context, user, conversationID string, id int64) (*Message, error) {

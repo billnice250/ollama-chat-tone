@@ -51,7 +51,7 @@ func (c Config) AuthMode() string {
 		return "oidc"
 	}
 	if c.BasicUser != "" && c.BasicPass != "" {
-		return "basic"
+		return "local"
 	}
 	return "none"
 }
