@@ -1,17 +1,31 @@
 # syntax=docker/dockerfile:1
+
 FROM golang:1.25-alpine AS build
 WORKDIR /src
+
 RUN apk add --no-cache ca-certificates
+
 COPY go.mod go.sum* ./
 RUN go mod download
+
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/server ./cmd/server
+
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath \
+    -ldflags="-s -w" \
+    -o /out/server \
+    ./cmd/server
+
 
 FROM alpine:latest AS production
 WORKDIR /app
+
 COPY --from=build /out/server /app/server
+
 VOLUME ["/data"]
+
 ENV ADDR=":12129"
+
 EXPOSE 12129
-USER nonroot:nonroot
+
 ENTRYPOINT ["/app/server"]
