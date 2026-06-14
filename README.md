@@ -21,6 +21,7 @@ DB_PATH="./app.db"
 OLLAMA_URL="http://localhost:11434"
 OLLAMA_TIMEOUT="5"
 DEFAULT_MODEL="llama3.2"
+OPEN_BROWSER="false"
 
 BASIC_AUTH_USER="admin"
 BASIC_AUTH_PASSWORD="change-me"
@@ -29,6 +30,8 @@ BASIC_AUTH_PASSWORD="change-me"
 `OLLAMA_TIMEOUT` defaults to `5` minutes. It also accepts Go duration values such as `30s`, `5m`, or `1h`.
 
 `ADDR=":0"` is supported. The app binds a free port and logs the actual URL.
+
+If the configured address is already in use, the app assumes another instance is already running, opens that URL in your browser, and exits cleanly.
 
 ## Run A Release Binary
 
@@ -86,11 +89,29 @@ Artifacts are written to `dist/`:
 - `ollama-chat-tone_<version>_windows_arm64.zip`
 - `checksums.txt`
 
+macOS archives include both the CLI binary and `Ollama Chat Tone.app`. When the `.app` is launched from Finder, logs are written to:
+
+```text
+~/Library/Logs/Ollama Chat Tone/ollama-chat-tone.log
+```
+
+The macOS `.app` opens the app URL in your default browser automatically.
+
+Windows archives include `ollama-chat-tone.exe`, `logo.ico`, and `run-with-logs.cmd`. Use `run-with-logs.cmd` when launching by double-click if you want logs written to:
+
+```text
+%LOCALAPPDATA%\Ollama Chat Tone\Logs\ollama-chat-tone.log
+```
+
+`run-with-logs.cmd` opens the app URL in your default browser automatically. For direct CLI or server use, set `OPEN_BROWSER=true` in `.env` if you want the app to open the browser after startup.
+
 Set a release version explicitly:
 
 ```bash
 make release VERSION=v1.0.0
 ```
+
+GitHub Releases are built by `.github/workflows/release.yml`. When a release is published, the workflow builds the archives above and uploads them as release assets. The workflow can also be run manually from GitHub Actions.
 
 ## Docker
 

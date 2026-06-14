@@ -21,6 +21,7 @@ type Config struct {
 	OllamaURL     string
 	OllamaTimeout time.Duration
 	DefaultModel  string
+	OpenBrowser   bool
 
 	BasicUser string
 	BasicPass string
@@ -57,12 +58,13 @@ func Load() Config {
 	}
 	return Config{
 		AppName:          getenv("APP_NAME", "Ollama Chat Tone"),
-		Addr:             getenv("ADDR", ":12129"),
+		Addr:             getenv("ADDR", ":0"),
 		SessionSecret:    getenv("SESSION_SECRET", secret),
 		DBPath:           getenv("DB_PATH", "./app.db"),
 		OllamaURL:        getenv("OLLAMA_URL", "http://ollama:11434"),
 		OllamaTimeout:    durationMinutes("OLLAMA_TIMEOUT", 5),
 		DefaultModel:     getenv("DEFAULT_MODEL", "llama3.2"),
+		OpenBrowser:      boolEnv("OPEN_BROWSER", false),
 		BasicUser:        getenv("BASIC_AUTH_USER", ""),
 		BasicPass:        getenv("BASIC_AUTH_PASSWORD", ""),
 		OIDCIssuer:       getenv("OIDC_ISSUER", ""),
@@ -127,8 +129,7 @@ func dotenv(paths ...string) {
 }
 
 func (c Config) CookieSecure() bool {
-	v, _ := strconv.ParseBool(getenv("COOKIE_SECURE", "false"))
-	return v
+	return boolEnv("COOKIE_SECURE", false)
 }
 
 func getenv(k, def string) string {
@@ -151,6 +152,18 @@ func durationMinutes(k string, def int) time.Duration {
 		return time.Duration(def) * time.Minute
 	}
 	return d
+}
+
+func boolEnv(k string, def bool) bool {
+	v := strings.TrimSpace(os.Getenv(k))
+	if v == "" {
+		return def
+	}
+	parsed, err := strconv.ParseBool(v)
+	if err != nil {
+		return def
+	}
+	return parsed
 }
 
 func parseEnvValue(value string) string {

@@ -9,6 +9,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os/exec"
+	"runtime"
 	"strings"
 
 	"github.com/billnice250/ollama-chat-tone/internal/auth"
@@ -185,11 +187,27 @@ func main() {
 
 	listener, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
+		if addressInUse(err) {
+			url := appURL(cfg.Addr)
+			log.Printf("%s appears to already be running at %s", cfg.AppName, url)
+			if err := openBrowser(url); err != nil {
+				log.Printf("open browser error url=%s err=%v", url, err)
+			}
+			return
+		}
 		log.Fatal(err)
 	}
 	actualAddr := listener.Addr().String()
-	log.Printf("%s running at %s", cfg.AppName, appURL(actualAddr))
+	url := appURL(actualAddr)
+	log.Printf("%s running at %s", cfg.AppName, url)
 	log.Printf("listening on %s configured=%s auth=%s ollama=%s timeout=%s", actualAddr, cfg.Addr, cfg.AuthMode(), cfg.OllamaURL, cfg.OllamaTimeout)
+	if cfg.OpenBrowser {
+		go func() {
+			if err := openBrowser(url); err != nil {
+				log.Printf("open browser error url=%s err=%v", url, err)
+			}
+		}()
+	}
 	log.Fatal(http.Serve(listener, requestLogger(mux)))
 }
 
@@ -390,6 +408,25 @@ func appURL(addr string) string {
 		host = "localhost"
 	}
 	return "http://" + net.JoinHostPort(host, port)
+}
+
+func openBrowser(url string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	return cmd.Start()
+}
+
+func addressInUse(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "address already in use") ||
+		strings.Contains(msg, "only one usage of each socket address")
 }
 
 func staticFiles() fs.FS {

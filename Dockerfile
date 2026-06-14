@@ -11,6 +11,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 COPY --from=build /out/server /app/server
 VOLUME ["/data"]
-EXPOSE 8080
+ENV ADDR=":12129"
+EXPOSE 12129
 USER nonroot:nonroot
 ENTRYPOINT ["/app/server"]
