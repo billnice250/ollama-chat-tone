@@ -3,3 +3,4 @@
 .gocache
 bin/
 dist/
+.DS_Store
