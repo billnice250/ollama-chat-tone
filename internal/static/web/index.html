@@ -17,6 +17,9 @@
 
 			<button id="new-chat" class="new-chat" type="button">New chat</button>
 			<div id="chat-list" class="chat-list"></div>
+			<nav class="sidebar-links" aria-label="External links">
+				<a href="https://blog.billnice.it/#contact" target="_blank" rel="noopener noreferrer">Contact Developer</a>
+			</nav>
 		</aside>
 
 		<main class="main">
@@ -30,6 +33,7 @@
 				<div class="controls">
 					<select id="model" aria-label="Model"></select>
 					<button id="refresh-models" class="secondary-button" type="button">Refresh</button>
+					<button class="secondary-button theme-toggle" type="button" aria-label="Toggle dark mode">Theme</button>
 					<a id="admin-link" class="admin-link hidden" href="/admin.html">Admin</a>
 					<a class="logout" href="/auth/logout">Logout</a>
 				</div>
@@ -48,6 +52,7 @@
 		</main>
 	</div>
 
+	<script src="/theme.js"></script>
 	<script src="/app.js"></script>
 </body>
 </html>
