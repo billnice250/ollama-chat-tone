@@ -58,7 +58,7 @@ func Load() Config {
 	}
 	return Config{
 		AppName:          getenv("APP_NAME", "Ollama Chat Tone"),
-		Addr:             getenv("ADDR", ":0"),
+		Addr:             getenv("ADDR", ":12129"),
 		SessionSecret:    getenv("SESSION_SECRET", secret),
 		DBPath:           getenv("DB_PATH", "./app.db"),
 		OllamaURL:        getenv("OLLAMA_URL", "http://ollama:11434"),
