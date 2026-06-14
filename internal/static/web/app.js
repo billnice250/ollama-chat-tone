@@ -173,11 +173,238 @@ function messageNode(message) {
 		bubble.append(thinking);
 	}
 
-	const content = document.createElement('span');
-	content.textContent = message.content || 'Thinking...';
+	const content = document.createElement('div');
+	content.className = 'markdown-body';
+	content.append(...renderMarkdown(message.content || 'Thinking...'));
 	bubble.append(content);
 	row.append(bubble);
 	return row;
+}
+
+function renderMarkdown(markdown) {
+	const lines = markdown.replace(/\r\n/g, '\n').split('\n');
+	const nodes = [];
+	let i = 0;
+
+	while (i < lines.length) {
+		const line = lines[i];
+		const trimmed = line.trim();
+
+		if (trimmed === '') {
+			i++;
+			continue;
+		}
+
+		const fence = trimmed.match(/^```(\w+)?\s*$/);
+		if (fence) {
+			const codeLines = [];
+			i++;
+			while (i < lines.length && !lines[i].trim().startsWith('```')) {
+				codeLines.push(lines[i]);
+				i++;
+			}
+			if (i < lines.length) {
+				i++;
+			}
+			nodes.push(codeBlock(codeLines.join('\n'), fence[1] || ''));
+			continue;
+		}
+
+		const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
+		if (heading) {
+			const h = document.createElement(`h${heading[1].length + 2}`);
+			h.append(...renderInline(heading[2]));
+			nodes.push(h);
+			i++;
+			continue;
+		}
+
+		if (/^[-*]\s+/.test(trimmed)) {
+			const list = document.createElement('ul');
+			while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
+				const item = document.createElement('li');
+				item.append(...renderInline(lines[i].trim().replace(/^[-*]\s+/, '')));
+				list.append(item);
+				i++;
+			}
+			nodes.push(list);
+			continue;
+		}
+
+		if (/^\d+\.\s+/.test(trimmed)) {
+			const list = document.createElement('ol');
+			while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
+				const item = document.createElement('li');
+				item.append(...renderInline(lines[i].trim().replace(/^\d+\.\s+/, '')));
+				list.append(item);
+				i++;
+			}
+			nodes.push(list);
+			continue;
+		}
+
+		if (isTableStart(lines, i)) {
+			const tableLines = [lines[i], lines[i + 1]];
+			i += 2;
+			while (i < lines.length && isTableRow(lines[i])) {
+				tableLines.push(lines[i]);
+				i++;
+			}
+			nodes.push(tableNode(tableLines));
+			continue;
+		}
+
+		const paragraph = [];
+		while (i < lines.length && lines[i].trim() !== '' && !isBlockStart(lines[i].trim())) {
+			paragraph.push(lines[i].trim());
+			i++;
+		}
+		const p = document.createElement('p');
+		p.append(...renderInline(paragraph.join(' ')));
+		nodes.push(p);
+	}
+
+	return nodes.length > 0 ? nodes : [document.createTextNode('')];
+}
+
+function isBlockStart(line) {
+	return /^```/.test(line) || /^(#{1,3})\s+/.test(line) || /^[-*]\s+/.test(line) || /^\d+\.\s+/.test(line) || isTableRow(line);
+}
+
+function codeBlock(code, language) {
+	const pre = document.createElement('pre');
+	const codeEl = document.createElement('code');
+	if (language) {
+		codeEl.dataset.language = language;
+	}
+	codeEl.textContent = code;
+	pre.append(codeEl);
+	return pre;
+}
+
+function isTableStart(lines, index) {
+	return isTableRow(lines[index]) && index + 1 < lines.length && isTableDivider(lines[index + 1]);
+}
+
+function isTableRow(line) {
+	const trimmed = line.trim();
+	return trimmed.includes('|') && splitTableRow(trimmed).length >= 2;
+}
+
+function isTableDivider(line) {
+	const cells = splitTableRow(line);
+	return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+}
+
+function splitTableRow(line) {
+	let trimmed = line.trim();
+	if (trimmed.startsWith('|')) {
+		trimmed = trimmed.slice(1);
+	}
+	if (trimmed.endsWith('|')) {
+		trimmed = trimmed.slice(0, -1);
+	}
+	return trimmed.split('|').map((cell) => cell.trim());
+}
+
+function tableNode(lines) {
+	const table = document.createElement('table');
+	const thead = document.createElement('thead');
+	const tbody = document.createElement('tbody');
+	const headerCells = splitTableRow(lines[0]);
+	const alignments = splitTableRow(lines[1]).map((cell) => {
+		if (cell.startsWith(':') && cell.endsWith(':')) {
+			return 'center';
+		}
+		if (cell.endsWith(':')) {
+			return 'right';
+		}
+		return 'left';
+	});
+
+	const headerRow = document.createElement('tr');
+	for (let i = 0; i < headerCells.length; i++) {
+		const th = document.createElement('th');
+		th.style.textAlign = alignments[i] || 'left';
+		th.append(...renderInline(headerCells[i]));
+		headerRow.append(th);
+	}
+	thead.append(headerRow);
+
+	for (const line of lines.slice(2)) {
+		const tr = document.createElement('tr');
+		const cells = splitTableRow(line);
+		for (let i = 0; i < headerCells.length; i++) {
+			const td = document.createElement('td');
+			td.style.textAlign = alignments[i] || 'left';
+			td.append(...renderInline(cells[i] || ''));
+			tr.append(td);
+		}
+		tbody.append(tr);
+	}
+
+	table.append(thead, tbody);
+	return table;
+}
+
+function renderInline(text) {
+	const nodes = [];
+	const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g;
+	let lastIndex = 0;
+	let match;
+
+	while ((match = pattern.exec(text)) !== null) {
+		if (match.index > lastIndex) {
+			nodes.push(document.createTextNode(text.slice(lastIndex, match.index)));
+		}
+		nodes.push(inlineNode(match[0]));
+		lastIndex = pattern.lastIndex;
+	}
+
+	if (lastIndex < text.length) {
+		nodes.push(document.createTextNode(text.slice(lastIndex)));
+	}
+	return nodes;
+}
+
+function inlineNode(token) {
+	if (token.startsWith('`') && token.endsWith('`')) {
+		const code = document.createElement('code');
+		code.textContent = token.slice(1, -1);
+		return code;
+	}
+	if (token.startsWith('**') && token.endsWith('**')) {
+		const strong = document.createElement('strong');
+		strong.append(...renderInline(token.slice(2, -2)));
+		return strong;
+	}
+	if (token.startsWith('*') && token.endsWith('*')) {
+		const em = document.createElement('em');
+		em.append(...renderInline(token.slice(1, -1)));
+		return em;
+	}
+
+	const link = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+	if (link) {
+		const a = document.createElement('a');
+		a.textContent = link[1];
+		a.href = safeHref(link[2]);
+		a.target = '_blank';
+		a.rel = 'noopener noreferrer';
+		return a;
+	}
+
+	return document.createTextNode(token);
+}
+
+function safeHref(href) {
+	try {
+		const url = new URL(href, window.location.origin);
+		if (url.protocol === 'http:' || url.protocol === 'https:' || url.protocol === 'mailto:') {
+			return url.href;
+		}
+	} catch {}
+	return '#';
 }
 
 function normalizeConversation(conversation) {
