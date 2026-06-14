@@ -175,7 +175,7 @@ func isDuplicateColumn(err error) bool {
 func (s *Store) ListConversations(ctx context.Context, user string) ([]Conversation, error) {
 	rows, err := s.DB.QueryContext(ctx, `
 SELECT c.id, c.user_email, c.title, c.created_at, c.updated_at, COUNT(m.id)
-FROM conversations
+FROM conversations c
 LEFT JOIN messages m ON m.conversation_id = c.id
 WHERE c.user_email = ?
 GROUP BY c.id, c.user_email, c.title, c.created_at, c.updated_at
