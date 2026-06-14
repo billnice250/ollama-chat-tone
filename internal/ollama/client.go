@@ -11,8 +11,9 @@ import (
 )
 
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role     string `json:"role"`
+	Content  string `json:"content"`
+	Thinking string `json:"thinking,omitempty"`
 }
 
 type ChatRequest struct {
@@ -71,6 +72,49 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 		return nil, err
 	}
 	return &out, nil
+}
+
+func (c *Client) StreamChat(ctx context.Context, req ChatRequest, onChunk func(ChatResponse) error) error {
+	if req.Model == "" {
+		return fmt.Errorf("model is required")
+	}
+	req.Stream = true
+	body, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/api/chat", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	hreq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.HTTP.Do(hreq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("ollama returned %s: %s", resp.Status, readErrorBody(resp.Body))
+	}
+
+	dec := json.NewDecoder(resp.Body)
+	for {
+		var out ChatResponse
+		if err := dec.Decode(&out); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		if err := onChunk(out); err != nil {
+			return err
+		}
+		if out.Done {
+			return nil
+		}
+	}
 }
 
 func (c *Client) Models(ctx context.Context) ([]Model, error) {

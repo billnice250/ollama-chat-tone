@@ -16,6 +16,7 @@ import (
 type ctxKey string
 
 const EmailKey ctxKey = "email"
+const basicLoggedOutCookie = "basic_logged_out"
 
 type Manager struct {
 	cfg          config.Config
@@ -48,6 +49,11 @@ func (m *Manager) RequireAuth(next http.Handler) http.Handler {
 		case "none":
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), EmailKey, "anonymous")))
 		case "basic":
+			if readCookie(r, basicLoggedOutCookie) == "1" {
+				w.Header().Set("WWW-Authenticate", `Basic realm="ollama-chat"`)
+				http.Error(w, "logged out", http.StatusUnauthorized)
+				return
+			}
 			u, p, ok := r.BasicAuth()
 			if !ok || u != m.cfg.BasicUser || p != m.cfg.BasicPass {
 				w.Header().Set("WWW-Authenticate", `Basic realm="ollama-chat"`)
@@ -67,6 +73,16 @@ func (m *Manager) RequireAuth(next http.Handler) http.Handler {
 }
 
 func (m *Manager) Login(w http.ResponseWriter, r *http.Request) {
+	if m.cfg.AuthMode() == "basic" {
+		http.SetCookie(w, &http.Cookie{Name: basicLoggedOutCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
+	if m.cfg.AuthMode() == "none" {
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
+
 	state := randomState()
 	setCookie(w, "state", state, true)
 	http.Redirect(w, r, m.oauth2Config.AuthCodeURL(state), http.StatusFound)
@@ -110,6 +126,13 @@ func (m *Manager) Callback(w http.ResponseWriter, r *http.Request) {
 
 func (m *Manager) Logout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: "email", Value: "", Path: "/", MaxAge: -1})
+	if m.cfg.AuthMode() == "basic" {
+		http.SetCookie(w, &http.Cookie{Name: basicLoggedOutCookie, Value: "1", Path: "/", MaxAge: 86400 * 30, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<!doctype html><title>Logged out</title><body style="font-family:system-ui;margin:40px"><h1>Logged out</h1><p>You are logged out of Ollama Chat.</p><p><a href="/auth/login">Log in again</a></p></body>`))
+		return
+	}
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 

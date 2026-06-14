@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Ollama Chat</title>
+	<style>
+		:root{color-scheme:light;--bg:#f6f7f9;--panel:#fff;--panel-2:#f0f3f7;--text:#111827;--muted:#667085;--line:#d9dee7;--accent:#0f766e;--accent-2:#134e4a;--danger:#b42318;--danger-bg:#fff1f0;--shadow:0 18px 50px rgba(16,24,40,.12)}
+		*{box-sizing:border-box}
+		body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
+		button,input,select,textarea{font:inherit}
+		button{border:0;cursor:pointer}
+		.app{height:100vh;display:grid;grid-template-columns:280px minmax(0,1fr)}
+		.sidebar{display:flex;flex-direction:column;border-right:1px solid var(--line);background:#111827;color:#f9fafb;min-width:0}
+		.brand{padding:20px 18px 14px;border-bottom:1px solid rgba(255,255,255,.12)}
+		.brand h1{margin:0;font-size:18px;line-height:1.2;font-weight:700}
+		.brand p{margin:6px 0 0;color:#cbd5e1;font-size:13px}
+		.new-chat{margin:14px 18px 16px;height:38px;border-radius:8px;background:#14b8a6;color:#052e2b;font-weight:700}
+		.chat-list{padding:0 10px 16px;overflow:auto}
+		.chat-item{width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;margin:3px 0;padding:10px;border-radius:8px;background:transparent;color:#e5e7eb;text-align:left}
+		.chat-item:hover,.chat-item.active{background:rgba(255,255,255,.1)}
+		.chat-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
+		.chat-count{font-size:12px;color:#cbd5e1}
+		.main{min-width:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto;background:var(--panel)}
+		.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 20px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.92);backdrop-filter:blur(12px)}
+		.title{min-width:0}
+		.title h2{margin:0;font-size:18px;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+		.title p{margin:3px 0 0;color:var(--muted);font-size:13px}
+		.controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+		select,input{height:36px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--text);padding:0 10px}
+		select{min-width:210px}
+		.custom-model{width:160px}
+		.logout{color:var(--accent-2);font-size:14px;text-decoration:none;font-weight:650}
+		.messages{overflow:auto;padding:28px 20px;background:linear-gradient(180deg,#f9fafb 0%,#eef2f6 100%)}
+		.empty{height:100%;display:grid;place-items:center;text-align:center;color:var(--muted)}
+		.empty strong{display:block;color:var(--text);font-size:24px;margin-bottom:6px}
+		.message{display:flex;margin:0 auto 16px;max-width:900px}
+		.message.user{justify-content:flex-end}
+		.bubble{max-width:min(720px,82%);padding:12px 14px;border:1px solid var(--line);border-radius:8px;background:#fff;box-shadow:0 1px 2px rgba(16,24,40,.05);white-space:pre-wrap;line-height:1.45}
+		.user .bubble{background:#0f766e;color:#fff;border-color:#0f766e}
+		.assistant .bubble{background:#fff}
+		.assistant.pending .bubble{color:var(--muted)}
+		.thinking{display:block;margin:0 0 10px;padding:9px 10px;border-left:3px solid #94a3b8;background:#f8fafc;color:#475467;border-radius:6px;font-size:13px;white-space:pre-wrap}
+		.thinking-label{display:block;margin-bottom:4px;font-size:11px;font-weight:750;color:#64748b;text-transform:uppercase;letter-spacing:.04em}
+		.role{display:block;margin-bottom:6px;font-size:12px;font-weight:750;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+		.user .role{color:#ccfbf1}
+		.error{margin:0 20px 12px;padding:10px 12px;border:1px solid #fda29b;background:var(--danger-bg);color:var(--danger);border-radius:8px;font-size:14px}
+		.hidden{display:none}
+		.composer{padding:14px 20px 18px;border-top:1px solid var(--line);background:#fff}
+		.composer-inner{max-width:900px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end}
+		textarea{width:100%;height:74px;resize:vertical;border:1px solid var(--line);border-radius:8px;padding:11px 12px;line-height:1.4}
+		.send{height:42px;min-width:92px;border-radius:8px;background:var(--accent);color:#fff;font-weight:750}
+		.send.stop{background:#b42318}
+		.send:disabled{opacity:.58;cursor:not-allowed}
+		.footer-note{max-width:900px;margin:8px auto 0;color:var(--muted);font-size:12px}
+		@media (max-width:760px){
+			.app{grid-template-columns:1fr;height:auto;min-height:100vh}
+			.sidebar{max-height:240px;border-right:0;border-bottom:1px solid var(--line)}
+			.main{min-height:calc(100vh - 240px)}
+			.topbar{align-items:flex-start;flex-direction:column}
+			.controls{width:100%;justify-content:flex-start}
+			select,.custom-model{width:100%;min-width:0}
+			.bubble{max-width:92%}
+			.composer-inner{grid-template-columns:1fr}
+			.send{width:100%}
+		}
+	</style>
+</head>
+<body>
+	<div class="app">
+		<aside class="sidebar">
+			<div class="brand">
+				<h1>Ollama Chat</h1>
+				<p id="app-status">Loading models...</p>
+			</div>
+			<button id="new-chat" class="new-chat" type="button">New chat</button>
+			<div id="chat-list" class="chat-list"></div>
+		</aside>
+
+		<main class="main">
+			<header class="topbar">
+				<div class="title">
+					<h2 id="chat-title">New chat</h2>
+					<p id="chat-meta">No messages yet</p>
+				</div>
+				<div class="controls">
+					<select id="model" aria-label="Model"></select>
+					<input id="custom-model" class="custom-model" placeholder="custom model">
+					<a class="logout" href="/auth/logout">Logout</a>
+				</div>
+			</header>
+
+			<section id="messages" class="messages" aria-live="polite"></section>
+			<div id="error" class="error hidden"></div>
+
+			<form id="composer" class="composer">
+				<div class="composer-inner">
+					<textarea id="prompt" placeholder="Ask something..."></textarea>
+					<button id="send" class="send" type="submit">Send</button>
+				</div>
+				<div class="footer-note">Press Cmd+Enter or Ctrl+Enter to send.</div>
+			</form>
+		</main>
+	</div>
+
+	<script>
+		const storageKey = 'ollama-chat-client.chats.v1';
+		const chatList = document.getElementById('chat-list');
+		const messagesEl = document.getElementById('messages');
+		const chatTitle = document.getElementById('chat-title');
+		const chatMeta = document.getElementById('chat-meta');
+		const appStatus = document.getElementById('app-status');
+		const model = document.getElementById('model');
+		const customModel = document.getElementById('custom-model');
+		const errorEl = document.getElementById('error');
+		const promptEl = document.getElementById('prompt');
+		const sendButton = document.getElementById('send');
+		const composer = document.getElementById('composer');
+		const newChatButton = document.getElementById('new-chat');
+
+		let defaultModel = 'llama3.2';
+		let activeChatId = '';
+		let chats = loadChats();
+		let streamController = null;
+
+		function createChat() {
+			const chat = { id: crypto.randomUUID(), title: 'New chat', messages: [], createdAt: Date.now() };
+			chats.unshift(chat);
+			activeChatId = chat.id;
+			saveChats();
+			render();
+		}
+
+		function loadChats() {
+			try {
+				const parsed = JSON.parse(localStorage.getItem(storageKey) || '[]');
+				if (Array.isArray(parsed) && parsed.length > 0) {
+					activeChatId = parsed[0].id;
+					return parsed;
+				}
+			} catch {}
+			return [];
+		}
+
+		function saveChats() {
+			localStorage.setItem(storageKey, JSON.stringify(chats.slice(0, 20)));
+		}
+
+		function activeChat() {
+			return chats.find((chat) => chat.id === activeChatId);
+		}
+
+		function showError(message) {
+			errorEl.textContent = message;
+			errorEl.classList.remove('hidden');
+		}
+
+		function clearError() {
+			errorEl.textContent = '';
+			errorEl.classList.add('hidden');
+		}
+
+		function selectedModel() {
+			return customModel.value.trim() || model.value || defaultModel;
+		}
+
+		function titleFrom(content) {
+			return content.replace(/\s+/g, ' ').trim().slice(0, 52) || 'New chat';
+		}
+
+		function render() {
+			if (chats.length === 0) {
+				createChat();
+				return;
+			}
+
+			const chat = activeChat() || chats[0];
+			activeChatId = chat.id;
+			chatTitle.textContent = chat.title;
+			chatMeta.textContent = chat.messages.length === 0
+				? 'No messages yet'
+				: `${chat.messages.length} messages`;
+
+			chatList.replaceChildren(...chats.map((item) => {
+				const button = document.createElement('button');
+				button.type = 'button';
+				button.className = `chat-item${item.id === activeChatId ? ' active' : ''}`;
+				button.innerHTML = `<span class="chat-title"></span><span class="chat-count"></span>`;
+				button.querySelector('.chat-title').textContent = item.title;
+				button.querySelector('.chat-count').textContent = String(item.messages.length);
+				button.addEventListener('click', () => {
+					activeChatId = item.id;
+					render();
+				});
+				return button;
+			}));
+
+			messagesEl.replaceChildren();
+			if (chat.messages.length === 0) {
+				const empty = document.createElement('div');
+				empty.className = 'empty';
+				empty.innerHTML = '<div><strong>Start a chat</strong><span>Pick a model and send your first message.</span></div>';
+				messagesEl.append(empty);
+				return;
+			}
+
+			for (const message of chat.messages) {
+				const row = document.createElement('article');
+				row.className = `message ${message.role === 'user' ? 'user' : 'assistant'}`;
+				const bubble = document.createElement('div');
+				bubble.className = 'bubble';
+				const role = document.createElement('span');
+				role.className = 'role';
+				role.textContent = message.role === 'user' ? 'You' : (message.model || selectedModel());
+				const content = document.createElement('span');
+				content.textContent = message.content || 'Thinking...';
+				bubble.append(role);
+				if (message.thinking) {
+					const thinking = document.createElement('span');
+					thinking.className = 'thinking';
+					const label = document.createElement('span');
+					label.className = 'thinking-label';
+					label.textContent = message.pending ? 'Thinking' : 'Thinking log';
+					const text = document.createElement('span');
+					text.textContent = message.thinking;
+					thinking.append(label, text);
+					bubble.append(thinking);
+				}
+				if (message.pending) {
+					row.classList.add('pending');
+				}
+				bubble.append(content);
+				row.append(bubble);
+				messagesEl.append(row);
+			}
+			messagesEl.scrollTop = messagesEl.scrollHeight;
+		}
+
+		async function fetchJSON(url, options) {
+			const response = await fetch(url, options);
+			const text = await response.text();
+			let data = {};
+			if (text) {
+				try {
+					data = JSON.parse(text);
+				} catch {
+					data = { error: text };
+				}
+			}
+			if (!response.ok) {
+				throw new Error(data.error || `${response.status} ${response.statusText}`);
+			}
+			return data;
+		}
+
+		function chatMessages(chat) {
+			return chat.messages
+				.filter((message) => !message.pending)
+				.map((message) => ({ role: message.role, content: message.content }));
+		}
+
+		function setStreaming(streaming) {
+			sendButton.textContent = streaming ? 'Stop' : 'Send';
+			sendButton.classList.toggle('stop', streaming);
+			promptEl.disabled = streaming;
+		}
+
+		async function fetchStream(url, options, onChunk) {
+			const response = await fetch(url, options);
+			if (!response.ok) {
+				const text = await response.text();
+				let data = {};
+				try {
+					data = JSON.parse(text);
+				} catch {
+					data = { error: text };
+				}
+				throw new Error(data.error || `${response.status} ${response.statusText}`);
+			}
+			if (!response.body) {
+				throw new Error('streaming is not supported by this browser');
+			}
+
+			const reader = response.body.getReader();
+			const decoder = new TextDecoder();
+			let buffer = '';
+
+			while (true) {
+				const { value, done } = await reader.read();
+				if (done) {
+					break;
+				}
+				buffer += decoder.decode(value, { stream: true });
+				const lines = buffer.split('\n');
+				buffer = lines.pop() || '';
+				for (const line of lines) {
+					if (!line.trim()) {
+						continue;
+					}
+					const chunk = JSON.parse(line);
+					if (chunk.error) {
+						throw new Error(chunk.error);
+					}
+					onChunk(chunk);
+				}
+			}
+
+			buffer += decoder.decode();
+			if (buffer.trim()) {
+				const chunk = JSON.parse(buffer);
+				if (chunk.error) {
+					throw new Error(chunk.error);
+				}
+				onChunk(chunk);
+			}
+		}
+
+		async function loadConfig() {
+			const cfg = await fetchJSON('/api/config');
+			defaultModel = cfg.defaultModel || defaultModel;
+		}
+
+		async function loadModels() {
+			await loadConfig();
+			const data = await fetchJSON('/api/models');
+			model.replaceChildren();
+
+			const names = [...new Set((data.models || []).map((m) => m.name).filter(Boolean))];
+			if (!names.includes(defaultModel)) {
+				names.unshift(defaultModel);
+			}
+
+			for (const name of names) {
+				const option = document.createElement('option');
+				option.value = name;
+				option.textContent = name;
+				option.selected = name === defaultModel;
+				model.append(option);
+			}
+
+			appStatus.textContent = names.length === 1
+				? `Model: ${names[0]}`
+				: `${names.length} models available`;
+		}
+
+		async function send(content) {
+			clearError();
+			const chat = activeChat();
+			if (!chat || !content) {
+				return;
+			}
+
+			if (chat.messages.length === 0) {
+				chat.title = titleFrom(content);
+			}
+			const currentModel = selectedModel();
+			chat.messages.push({ role: 'user', content });
+			saveChats();
+			render();
+
+			streamController = new AbortController();
+			setStreaming(true);
+			promptEl.value = '';
+
+			try {
+				const assistant = { role: 'assistant', content: '', model: currentModel, pending: true };
+				chat.messages.push(assistant);
+				render();
+
+				await fetchStream('/api/chat', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					signal: streamController.signal,
+					body: JSON.stringify({ model: currentModel, messages: chatMessages(chat), stream: true }),
+				}, (chunk) => {
+					if (chunk.message && chunk.message.thinking) {
+						assistant.thinking = (assistant.thinking || '') + chunk.message.thinking;
+						appStatus.textContent = `${currentModel} is thinking...`;
+						saveChats();
+						render();
+					}
+					if (chunk.message && chunk.message.content) {
+						assistant.content += chunk.message.content;
+						appStatus.textContent = `Streaming from ${currentModel}`;
+						saveChats();
+						render();
+					}
+					if (chunk.done) {
+						assistant.pending = false;
+					}
+				});
+				assistant.pending = false;
+				if (!assistant.content) {
+					assistant.content = assistant.thinking ? '(no final response)' : '(empty response)';
+				}
+				appStatus.textContent = `Model: ${currentModel}`;
+				saveChats();
+				render();
+			} catch (err) {
+				if (err.name === 'AbortError') {
+					const last = chat.messages[chat.messages.length - 1];
+					if (last && last.pending) {
+						last.pending = false;
+						last.content = last.content ? `${last.content}\n\n[stopped]` : '[stopped]';
+					}
+					appStatus.textContent = `Stopped ${currentModel}`;
+					saveChats();
+					render();
+					return;
+				}
+				showError(err.message);
+				const last = chat.messages[chat.messages.length - 1];
+				if (last && last.pending) {
+					last.pending = false;
+					last.content = `Error: ${err.message}`;
+				} else {
+					chat.messages.push({ role: 'assistant', content: `Error: ${err.message}`, model: currentModel });
+				}
+				saveChats();
+				render();
+			} finally {
+				streamController = null;
+				setStreaming(false);
+				promptEl.focus();
+			}
+		}
+
+		newChatButton.addEventListener('click', createChat);
+		composer.addEventListener('submit', (event) => {
+			event.preventDefault();
+			if (streamController) {
+				streamController.abort();
+				return;
+			}
+			send(promptEl.value.trim());
+		});
+		promptEl.addEventListener('keydown', (event) => {
+			if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+				event.preventDefault();
+				send(promptEl.value.trim());
+			}
+		});
+
+		if (chats.length === 0) {
+			createChat();
+		} else {
+			render();
+		}
+
+		loadModels().catch((err) => {
+			model.replaceChildren();
+			const option = document.createElement('option');
+			option.value = defaultModel;
+			option.textContent = defaultModel;
+			model.append(option);
+			appStatus.textContent = `Model: ${defaultModel}`;
+			showError(`Could not load models: ${err.message}`);
+		});
+	</script>
+</body>
+</html>

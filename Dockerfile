@@ -10,7 +10,6 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/server 
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 COPY --from=build /out/server /app/server
-COPY web /app/web
 VOLUME ["/data"]
 EXPOSE 8080
 USER nonroot:nonroot
