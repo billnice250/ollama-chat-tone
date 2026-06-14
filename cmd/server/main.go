@@ -39,6 +39,7 @@ func main() {
 	mux.HandleFunc("/auth/callback", authm.Callback)
 	mux.HandleFunc("/auth/logout", authm.Logout)
 	mux.HandleFunc("/styles.css", servePublicStatic("styles.css"))
+	mux.HandleFunc("/logo.svg", servePublicStatic("logo.svg"))
 	mux.Handle("/", authm.RequireAuth(http.FileServer(http.FS(staticFiles()))))
 	mux.Handle("/api/config", authm.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

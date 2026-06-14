@@ -1,0 +1,32 @@
+services:
+  ollama-chat:
+    build: .
+    image: ollama-chat-client:local
+    ports:
+      - "8080:8080"
+    environment:
+      APP_NAME: "Ollama Chat"
+      ADDR: ":8080"
+      DB_PATH: "/data/app.db"
+      OLLAMA_URL: "http://ollama:11434"
+      OLLAMA_TIMEOUT: "5"
+      DEFAULT_MODEL: "llama3.2"
+      BASIC_AUTH_USER: "admin"
+      BASIC_AUTH_PASSWORD: "change-me"
+    volumes:
+      - app-data:/data
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  app-data:
+  ollama-data:
