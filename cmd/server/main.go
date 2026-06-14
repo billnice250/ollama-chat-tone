@@ -38,6 +38,7 @@ func main() {
 	mux.HandleFunc("/auth/signup", authm.Signup)
 	mux.HandleFunc("/auth/callback", authm.Callback)
 	mux.HandleFunc("/auth/logout", authm.Logout)
+	mux.HandleFunc("/styles.css", servePublicStatic("styles.css"))
 	mux.Handle("/", authm.RequireAuth(http.FileServer(http.FS(staticFiles()))))
 	mux.Handle("/api/config", authm.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -181,12 +182,22 @@ func main() {
 		auth.WriteJSON(w, res)
 	})))
 
-	log.Printf("%s running at %s", cfg.AppName, appURL(cfg.BaseURL, cfg.Addr))
+	log.Printf("%s running at %s", cfg.AppName, appURL(cfg.Addr))
 	log.Printf("listening on %s auth=%s ollama=%s", cfg.Addr, cfg.AuthMode(), cfg.OllamaURL)
 	log.Fatal(http.ListenAndServe(cfg.Addr, requestLogger(mux)))
 }
 
 func contextBackground() context.Context { return context.Background() }
+
+func servePublicStatic(name string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		http.ServeFileFS(w, r, staticFiles(), name)
+	}
+}
 
 func storageMode(authMode string) string {
 	if authMode == "none" {
@@ -364,11 +375,7 @@ func streamChat(w http.ResponseWriter, r *http.Request, oc *ollama.Client, req o
 	return nil
 }
 
-func appURL(baseURL, addr string) string {
-	if baseURL != "" {
-		return strings.TrimRight(baseURL, "/")
-	}
-
+func appURL(addr string) string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return "http://" + addr

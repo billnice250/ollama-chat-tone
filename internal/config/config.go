@@ -10,7 +10,6 @@ import (
 type Config struct {
 	AppName       string
 	Addr          string
-	BaseURL       string
 	SessionSecret string
 	DBPath        string
 	OllamaURL     string
@@ -31,7 +30,6 @@ func Load() Config {
 	return Config{
 		AppName:          getenv("APP_NAME", "Ollama Chat"),
 		Addr:             getenv("ADDR", ":8080"),
-		BaseURL:          getenv("BASE_URL", "http://localhost:8080"),
 		SessionSecret:    getenv("SESSION_SECRET", "dev-change-me"),
 		DBPath:           getenv("DB_PATH", "./app.db"),
 		OllamaURL:        getenv("OLLAMA_URL", "http://ollama:11434"),
@@ -41,7 +39,7 @@ func Load() Config {
 		OIDCIssuer:       getenv("OIDC_ISSUER", ""),
 		OIDCClientID:     getenv("OIDC_CLIENT_ID", ""),
 		OIDCClientSecret: getenv("OIDC_CLIENT_SECRET", ""),
-		OIDCRedirectURL:  getenv("OIDC_REDIRECT_URL", getenv("BASE_URL", "http://localhost:8080")+"/auth/callback"),
+		OIDCRedirectURL:  getenv("OIDC_REDIRECT_URL", "/auth/callback"),
 		AllowedEmails:    csvSet(getenv("ALLOWED_EMAILS", "")),
 	}
 }
