@@ -26,7 +26,12 @@ icons:
 build:
 	@echo "building $(BIN_DIR)/$(APP_NAME)"
 	@mkdir -p $(BIN_DIR)
-	@GOCACHE=$(GO_CACHE_DIR) CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(BIN_DIR)/$(APP_NAME) $(CMD)
+	@err="$(BIN_DIR)/go-build.err"; \
+	GOCACHE=$(GO_CACHE_DIR) CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(BIN_DIR)/$(APP_NAME) $(CMD) 2> "$$err"; \
+	status=$$?; \
+	if [ $$status -ne 0 ]; then cat "$$err" >&2; rm -f "$$err"; exit $$status; fi; \
+	grep -v '^go: writing stat cache:' "$$err" >&2 || true; \
+	rm -f "$$err"
 
 build-mac: icons build-darwin-amd64 build-darwin-arm64
 
@@ -72,7 +77,12 @@ define package_binary
 	work="$(DIST_DIR)/$${name}"; \
 	mkdir -p "$$work"; \
 	echo "building release asset $$name"; \
-	GOCACHE=$(GO_CACHE_DIR) CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags="$(LDFLAGS)" -o "$$work/$(APP_NAME)$${ext}" $(CMD); \
+	err="$$work/go-build.err"; \
+	GOCACHE=$(GO_CACHE_DIR) CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags="$(LDFLAGS)" -o "$$work/$(APP_NAME)$${ext}" $(CMD) 2> "$$err"; \
+	status=$$?; \
+	if [ $$status -ne 0 ]; then cat "$$err" >&2; rm -f "$$err"; exit $$status; fi; \
+	grep -v '^go: writing stat cache:' "$$err" >&2 || true; \
+	rm -f "$$err"; \
 	cp README.md "$$work/"; \
 	cp .env.example "$$work/"; \
 	if [ "$$os" = "darwin" ]; then \
