@@ -1,12 +1,38 @@
 package db
 
 import (
+	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
+	"errors"
+	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
 
 type Store struct{ DB *sql.DB }
+
+type Conversation struct {
+	ID           string    `json:"id"`
+	UserEmail    string    `json:"-"`
+	Title        string    `json:"title"`
+	CreatedAt    string    `json:"createdAt"`
+	UpdatedAt    string    `json:"updatedAt"`
+	MessageCount int       `json:"messageCount"`
+	Messages     []Message `json:"messages,omitempty"`
+}
+
+type Message struct {
+	ID             int64  `json:"id"`
+	ConversationID string `json:"conversationId"`
+	Role           string `json:"role"`
+	Content        string `json:"content"`
+	Thinking       string `json:"thinking,omitempty"`
+	Model          string `json:"model,omitempty"`
+	CreatedAt      string `json:"createdAt"`
+}
 
 func Open(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path)
@@ -18,17 +44,181 @@ CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
   user_email TEXT NOT NULL,
   title TEXT NOT NULL DEFAULT 'New chat',
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   conversation_id TEXT NOT NULL,
   role TEXT NOT NULL,
   content TEXT NOT NULL,
+  thinking TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );`)
 	if err != nil {
 		return nil, err
 	}
+	if err := migrate(db); err != nil {
+		return nil, err
+	}
 	return &Store{DB: db}, nil
+}
+
+func migrate(db *sql.DB) error {
+	stmts := []string{
+		`ALTER TABLE conversations ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP`,
+		`ALTER TABLE messages ADD COLUMN thinking TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE messages ADD COLUMN model TEXT NOT NULL DEFAULT ''`,
+	}
+	for _, stmt := range stmts {
+		if _, err := db.Exec(stmt); err != nil && !isDuplicateColumn(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+func isDuplicateColumn(err error) bool {
+	return err != nil && (errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "duplicate column name"))
+}
+
+func (s *Store) ListConversations(ctx context.Context, user string) ([]Conversation, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+SELECT c.id, c.user_email, c.title, c.created_at, c.updated_at, COUNT(m.id)
+FROM conversations
+LEFT JOIN messages m ON m.conversation_id = c.id
+WHERE c.user_email = ?
+GROUP BY c.id, c.user_email, c.title, c.created_at, c.updated_at
+ORDER BY c.updated_at DESC, c.created_at DESC`, user)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Conversation
+	for rows.Next() {
+		var c Conversation
+		if err := rows.Scan(&c.ID, &c.UserEmail, &c.Title, &c.CreatedAt, &c.UpdatedAt, &c.MessageCount); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CreateConversation(ctx context.Context, user, title string) (*Conversation, error) {
+	if title == "" {
+		title = "New chat"
+	}
+	c := &Conversation{ID: newID(), UserEmail: user, Title: title}
+	_, err := s.DB.ExecContext(ctx, `
+INSERT INTO conversations (id, user_email, title, created_at, updated_at)
+VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, c.ID, c.UserEmail, c.Title)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetConversation(ctx, user, c.ID)
+}
+
+func (s *Store) GetConversation(ctx context.Context, user, id string) (*Conversation, error) {
+	var c Conversation
+	err := s.DB.QueryRowContext(ctx, `
+SELECT id, user_email, title, created_at, updated_at
+FROM conversations
+WHERE user_email = ? AND id = ?`, user, id).Scan(&c.ID, &c.UserEmail, &c.Title, &c.CreatedAt, &c.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	messages, err := s.ListMessages(ctx, user, id)
+	if err != nil {
+		return nil, err
+	}
+	c.Messages = messages
+	c.MessageCount = len(messages)
+	return &c, nil
+}
+
+func (s *Store) ListMessages(ctx context.Context, user, conversationID string) ([]Message, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+SELECT m.id, m.conversation_id, m.role, m.content, m.thinking, m.model, m.created_at
+FROM messages m
+JOIN conversations c ON c.id = m.conversation_id
+WHERE c.user_email = ? AND m.conversation_id = ?
+ORDER BY m.id ASC`, user, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Message
+	for rows.Next() {
+		var m Message
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &m.Thinking, &m.Model, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) AddMessage(ctx context.Context, user, conversationID string, msg Message) (*Message, error) {
+	var exists int
+	if err := s.DB.QueryRowContext(ctx, `SELECT 1 FROM conversations WHERE user_email = ? AND id = ?`, user, conversationID).Scan(&exists); err != nil {
+		return nil, err
+	}
+	res, err := s.DB.ExecContext(ctx, `
+INSERT INTO messages (conversation_id, role, content, thinking, model, created_at)
+VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`, conversationID, msg.Role, msg.Content, msg.Thinking, msg.Model)
+	if err != nil {
+		return nil, err
+	}
+	_, _ = s.DB.ExecContext(ctx, `UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, conversationID)
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	return s.GetMessage(ctx, user, conversationID, id)
+}
+
+func (s *Store) UpdateConversationTitle(ctx context.Context, user, id, title string) error {
+	if title == "" {
+		title = "New chat"
+	}
+	res, err := s.DB.ExecContext(ctx, `
+UPDATE conversations SET title = ?, updated_at = CURRENT_TIMESTAMP
+WHERE user_email = ? AND id = ?`, title, user, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) GetMessage(ctx context.Context, user, conversationID string, id int64) (*Message, error) {
+	var m Message
+	err := s.DB.QueryRowContext(ctx, `
+SELECT m.id, m.conversation_id, m.role, m.content, m.thinking, m.model, m.created_at
+FROM messages m
+JOIN conversations c ON c.id = m.conversation_id
+WHERE c.user_email = ? AND m.conversation_id = ? AND m.id = ?`, user, conversationID, id).
+		Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &m.Thinking, &m.Model, &m.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+func newID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return hex.EncodeToString([]byte(time.Now().Format(time.RFC3339Nano)))
+	}
+	return hex.EncodeToString(b[:])
 }

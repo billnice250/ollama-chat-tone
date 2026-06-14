@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -46,7 +47,51 @@ func main() {
 			"appName":      cfg.AppName,
 			"defaultModel": cfg.DefaultModel,
 			"authMode":     cfg.AuthMode(),
+			"storageMode":  storageMode(cfg.AuthMode()),
 		})
+	})))
+	mux.Handle("/api/conversations", authm.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user := userFromRequest(r)
+		if user == "anonymous" {
+			writeError(w, http.StatusForbidden, "anonymous chats are stored in local browser storage")
+			return
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			conversations, err := store.ListConversations(r.Context(), user)
+			if err != nil {
+				log.Printf("list conversations error user=%q err=%v", user, err)
+				writeError(w, http.StatusInternalServerError, "could not load conversations")
+				return
+			}
+			auth.WriteJSON(w, map[string]any{"conversations": conversations})
+		case http.MethodPost:
+			var req struct {
+				Title string `json:"title"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeError(w, http.StatusBadRequest, "bad request")
+				return
+			}
+			conversation, err := store.CreateConversation(r.Context(), user, req.Title)
+			if err != nil {
+				log.Printf("create conversation error user=%q err=%v", user, err)
+				writeError(w, http.StatusInternalServerError, "could not create conversation")
+				return
+			}
+			auth.WriteJSON(w, map[string]any{"conversation": conversation})
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	})))
+	mux.Handle("/api/conversations/", authm.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user := userFromRequest(r)
+		if user == "anonymous" {
+			writeError(w, http.StatusForbidden, "anonymous chats are stored in local browser storage")
+			return
+		}
+		handleConversation(w, r, store, user)
 	})))
 	mux.Handle("/api/models", authm.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -101,6 +146,102 @@ func main() {
 }
 
 func contextBackground() context.Context { return context.Background() }
+
+func storageMode(authMode string) string {
+	if authMode == "none" {
+		return "local"
+	}
+	return "server"
+}
+
+func userFromRequest(r *http.Request) string {
+	if user, ok := r.Context().Value(auth.EmailKey).(string); ok && user != "" {
+		return user
+	}
+	return "anonymous"
+}
+
+func handleConversation(w http.ResponseWriter, r *http.Request, store *db.Store, user string) {
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/conversations/"), "/")
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeError(w, http.StatusNotFound, "conversation not found")
+		return
+	}
+	conversationID := parts[0]
+
+	if len(parts) == 1 {
+		switch r.Method {
+		case http.MethodGet:
+			conversation, err := store.GetConversation(r.Context(), user, conversationID)
+			if err != nil {
+				writeDBError(w, err, "conversation not found")
+				return
+			}
+			auth.WriteJSON(w, map[string]any{"conversation": conversation})
+		case http.MethodPatch:
+			var req struct {
+				Title string `json:"title"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeError(w, http.StatusBadRequest, "bad request")
+				return
+			}
+			if err := store.UpdateConversationTitle(r.Context(), user, conversationID, req.Title); err != nil {
+				writeDBError(w, err, "conversation not found")
+				return
+			}
+			conversation, err := store.GetConversation(r.Context(), user, conversationID)
+			if err != nil {
+				writeDBError(w, err, "conversation not found")
+				return
+			}
+			auth.WriteJSON(w, map[string]any{"conversation": conversation})
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "messages" {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var req struct {
+			Role     string `json:"role"`
+			Content  string `json:"content"`
+			Thinking string `json:"thinking"`
+			Model    string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad request")
+			return
+		}
+		msg, err := store.AddMessage(r.Context(), user, conversationID, db.Message{
+			Role:     req.Role,
+			Content:  req.Content,
+			Thinking: req.Thinking,
+			Model:    req.Model,
+		})
+		if err != nil {
+			writeDBError(w, err, "conversation not found")
+			return
+		}
+		auth.WriteJSON(w, map[string]any{"message": msg})
+		return
+	}
+
+	writeError(w, http.StatusNotFound, "conversation not found")
+}
+
+func writeDBError(w http.ResponseWriter, err error, notFound string) {
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, notFound)
+		return
+	}
+	writeError(w, http.StatusInternalServerError, err.Error())
+}
 
 func requestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
