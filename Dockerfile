@@ -13,12 +13,12 @@ RUN set -eu; \
     resolved_version="$VERSION"; \
     head_sha=""; \
     if [ -f .git/HEAD ]; then \
-      head_ref="$(tr -d '\r\n' < .git/HEAD)"; \
+      head_ref="$(head -n 1 .git/HEAD | tr -d '\r')"; \
       case "$head_ref" in \
         ref:\ *) \
           ref_path="${head_ref#ref: }"; \
           if [ -f ".git/$ref_path" ]; then \
-            head_sha="$(tr -d '\r\n' < ".git/$ref_path")"; \
+            head_sha="$(head -n 1 ".git/$ref_path" | tr -d '\r')"; \
           elif [ -f .git/packed-refs ]; then \
             head_sha="$(awk -v ref="$ref_path" '$2==ref { print $1; exit }' .git/packed-refs || true)"; \
           fi ;; \
@@ -38,6 +38,9 @@ RUN set -eu; \
     fi; \
     if [ -z "$resolved_version" ]; then \
       resolved_version="$(printf '%s' "$head_sha" | cut -c1-6)"; \
+    fi; \
+    if [ -z "$resolved_version" ]; then \
+      resolved_version="dev"; \
     fi; \
     CGO_ENABLED=0 GOOS=linux go build \
       -trimpath \
