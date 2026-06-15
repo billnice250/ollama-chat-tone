@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -12,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path"
 	"runtime"
 	"strings"
 	"sync"
@@ -47,7 +50,7 @@ func main() {
 	mux.HandleFunc("/auth/logout", app.Logout)
 	mux.HandleFunc("/styles.css", servePublicStatic("styles.css"))
 	mux.HandleFunc("/logo.svg", servePublicStatic("logo.svg"))
-	mux.Handle("/", app.RequireAuth(http.FileServer(http.FS(staticFiles()))))
+	mux.Handle("/", app.RequireAuth(staticFileServer(staticFiles())))
 	mux.Handle("/api/account", app.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -387,8 +390,66 @@ func servePublicStatic(name string) http.HandlerFunc {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
+		if writeStaticCacheHeaders(w, r, staticFiles(), name) {
+			return
+		}
 		http.ServeFileFS(w, r, staticFiles(), name)
 	}
+}
+
+func staticFileServer(files fs.FS) http.Handler {
+	next := http.FileServer(http.FS(files))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if writeStaticCacheHeaders(w, r, files, staticRequestPath(r.URL.Path)) {
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func writeStaticCacheHeaders(w http.ResponseWriter, r *http.Request, files fs.FS, name string) bool {
+	etag, ok := staticETag(files, name)
+	if !ok {
+		w.Header().Set("Cache-Control", "no-cache")
+		return false
+	}
+	w.Header().Set("Cache-Control", "public, max-age=0, must-revalidate")
+	w.Header().Set("ETag", etag)
+	if etagMatches(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return true
+	}
+	return false
+}
+
+func staticRequestPath(urlPath string) string {
+	name := strings.TrimPrefix(path.Clean("/"+urlPath), "/")
+	if name == "" || name == "." {
+		return "index.html"
+	}
+	return name
+}
+
+func staticETag(files fs.FS, name string) (string, bool) {
+	data, err := fs.ReadFile(files, name)
+	if err != nil {
+		return "", false
+	}
+	sum := sha256.Sum256(data)
+	return `"` + hex.EncodeToString(sum[:]) + `"`, true
+}
+
+func etagMatches(header, etag string) bool {
+	for part := range strings.SplitSeq(header, ",") {
+		if strings.TrimSpace(part) == etag {
+			return true
+		}
+	}
+	return false
 }
 
 func storageMode(authMode string) string {
