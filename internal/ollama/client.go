@@ -35,12 +35,17 @@ type Model struct {
 }
 
 type Client struct {
-	BaseURL string
-	HTTP    *http.Client
+	BaseURL    string
+	HTTP       *http.Client
+	streamHTTP *http.Client
 }
 
 func New(base string, timeout time.Duration) *Client {
-	return &Client{BaseURL: base, HTTP: &http.Client{Timeout: timeout}}
+	return &Client{
+		BaseURL:    base,
+		HTTP:       &http.Client{Timeout: timeout},
+		streamHTTP: &http.Client{}, // no client-level timeout for streaming; duration is controlled by context
+	}
 }
 
 func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
@@ -91,7 +96,7 @@ func (c *Client) StreamChat(ctx context.Context, req ChatRequest, onChunk func(C
 	}
 	hreq.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.HTTP.Do(hreq)
+	resp, err := c.streamHTTP.Do(hreq)
 	if err != nil {
 		return err
 	}
