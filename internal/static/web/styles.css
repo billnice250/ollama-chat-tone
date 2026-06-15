@@ -703,6 +703,63 @@ select {
 	display: none;
 }
 
+.modal {
+	position: fixed;
+	z-index: 60;
+	inset: 0;
+	display: grid;
+	place-items: center;
+	padding: 18px;
+	background: rgba(2, 6, 23, .68);
+	backdrop-filter: blur(4px);
+}
+
+.modal.hidden {
+	display: none;
+}
+
+.modal-panel {
+	width: min(420px, 100%);
+	padding: 20px;
+	border: 1px solid var(--color-line);
+	border-radius: var(--radius);
+	background: var(--color-surface);
+	box-shadow: var(--shadow-overlay);
+}
+
+.modal-panel h2 {
+	margin: 0 0 8px;
+	font-size: 20px;
+}
+
+.modal-panel p {
+	margin: 0 0 10px;
+	color: var(--color-muted);
+	line-height: 1.45;
+}
+
+.modal-warning {
+	color: var(--color-danger);
+	font-weight: 700;
+}
+
+.modal-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 16px;
+}
+
+.danger-button {
+	height: 36px;
+	padding: 0 12px;
+	border: 1px solid var(--color-danger);
+	border-radius: var(--radius);
+	background: var(--color-danger);
+	color: white;
+	font-weight: 750;
+}
+
 .auth-box {
 	width: min(420px, 92vw);
 	padding: 24px;
@@ -890,7 +947,8 @@ textarea::placeholder {
 }
 
 .send:disabled,
-.secondary-button:disabled {
+.secondary-button:disabled,
+.danger-button:disabled {
 	opacity: .58;
 	cursor: not-allowed;
 }
