@@ -15,10 +15,10 @@ import (
 type Store struct{ DB *sql.DB }
 
 const (
-	sqliteBusyTimeout  = 5 * time.Second
-	sqliteRetryBase    = 50 * time.Millisecond
-	sqliteRetryMax     = 5
-	sqliteTimeLayout   = "2006-01-02 15:04:05"
+	sqliteBusyTimeout = 5 * time.Second
+	sqliteRetryBase   = 50 * time.Millisecond
+	sqliteRetryMax    = 5
+	sqliteTimeLayout  = "2006-01-02 15:04:05"
 )
 
 type Conversation struct {

@@ -14,15 +14,15 @@ import (
 )
 
 type Config struct {
-	AppName       string
-	Addr          string
-	SessionSecret string
-	DBPath        string
-	OllamaURL     string
-	OllamaTimeout time.Duration
+	AppName        string
+	Addr           string
+	SessionSecret  string
+	DBPath         string
+	OllamaURL      string
+	OllamaTimeout  time.Duration
 	JobIdleTimeout time.Duration
-	DefaultModel  string
-	OpenBrowser   bool
+	DefaultModel   string
+	OpenBrowser    bool
 
 	BasicUser string
 	BasicPass string
