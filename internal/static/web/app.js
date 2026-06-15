@@ -13,6 +13,7 @@ const el = {
 	messages: document.getElementById('messages'),
 	model: document.getElementById('model'),
 	thinkToggle: document.getElementById('think-toggle'),
+	reloadConfig: document.getElementById('reload-config'),
 	refreshModels: document.getElementById('refresh-models'),
 	adminLink: document.getElementById('admin-link'),
 	error: document.getElementById('error'),
@@ -833,6 +834,7 @@ async function loadConfig() {
 	el.appName.textContent = state.appName;
 	el.currentUser.textContent = state.currentUser;
 	el.adminLink.classList.toggle('hidden', !state.isAdmin);
+	el.reloadConfig.classList.toggle('hidden', state.currentUser !== 'anonymous' && !state.isAdmin);
 	el.deleteAccount.classList.toggle('hidden', state.currentUser === 'anonymous' || state.authMode === 'none');
 }
 
@@ -975,6 +977,23 @@ el.menuBackdrop.addEventListener('click', closeMobileSidebar);
 
 el.deleteAccount.addEventListener('click', () => {
 	deleteAccount().catch((err) => showError(err.message));
+});
+
+el.reloadConfig.addEventListener('click', async () => {
+	clearError();
+	el.reloadConfig.disabled = true;
+	el.appStatus.textContent = 'Reloading config...';
+	try {
+		const data = await fetchJSON('/api/config/reload', { method: 'POST' });
+		await loadConfig();
+		await loadModels();
+		const warnings = data.warnings && data.warnings.length ? ` (${data.warnings.join(', ')})` : '';
+		el.appStatus.textContent = `Config reloaded${warnings}`;
+	} catch (err) {
+		showError(`Could not reload config: ${err.message}`);
+	} finally {
+		el.reloadConfig.disabled = false;
+	}
 });
 
 el.refreshModels.addEventListener('click', () => {

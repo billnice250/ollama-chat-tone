@@ -44,8 +44,8 @@ func GenerateSessionSecret() string {
 }
 
 func Load() Config {
-	dotenv(".env")
-	secret := os.Getenv("SESSION_SECRET")
+	fileEnv := dotenv(".env")
+	secret := getenv(fileEnv, "SESSION_SECRET", "")
 	if secret == "" {
 		log.Println("WARNING: SESSION_SECRET not set, generating random secret. This will invalidate all sessions on restart.")
 		secret = GenerateSessionSecret()
@@ -56,20 +56,20 @@ func Load() Config {
 		log.Println("Using provided SESSION_SECRET.")
 	}
 	return Config{
-		AppName:          getenv("APP_NAME", "Ollama Chat Tone"),
-		Addr:             getenv("ADDR", ":12129"),
-		SessionSecret:    getenv("SESSION_SECRET", secret),
-		DBPath:           getenv("DB_PATH", "./app.db"),
-		OllamaURL:        getenv("OLLAMA_URL", "http://ollama:11434"),
-		OllamaTimeout:    durationMinutes("OLLAMA_TIMEOUT", 5),
-		DefaultModel:     getenv("DEFAULT_MODEL", "llama3.2"),
-		OpenBrowser:      boolEnv("OPEN_BROWSER", false),
-		BasicUser:        getenv("BASIC_AUTH_USER", ""),
-		BasicPass:        getenv("BASIC_AUTH_PASSWORD", ""),
-		OIDCIssuer:       getenv("OIDC_ISSUER", ""),
-		OIDCClientID:     getenv("OIDC_CLIENT_ID", ""),
-		OIDCClientSecret: getenv("OIDC_CLIENT_SECRET", ""),
-		OIDCRedirectURL:  getenv("OIDC_REDIRECT_URL", "/auth/callback"),
+		AppName:          getenv(fileEnv, "APP_NAME", "Ollama Chat Tone"),
+		Addr:             getenv(fileEnv, "ADDR", ":12129"),
+		SessionSecret:    getenv(fileEnv, "SESSION_SECRET", secret),
+		DBPath:           getenv(fileEnv, "DB_PATH", "./app.db"),
+		OllamaURL:        getenv(fileEnv, "OLLAMA_URL", "http://ollama:11434"),
+		OllamaTimeout:    durationMinutes(fileEnv, "OLLAMA_TIMEOUT", 5),
+		DefaultModel:     getenv(fileEnv, "DEFAULT_MODEL", "llama3.2"),
+		OpenBrowser:      boolEnv(fileEnv, "OPEN_BROWSER", false),
+		BasicUser:        getenv(fileEnv, "BASIC_AUTH_USER", ""),
+		BasicPass:        getenv(fileEnv, "BASIC_AUTH_PASSWORD", ""),
+		OIDCIssuer:       getenv(fileEnv, "OIDC_ISSUER", ""),
+		OIDCClientID:     getenv(fileEnv, "OIDC_CLIENT_ID", ""),
+		OIDCClientSecret: getenv(fileEnv, "OIDC_CLIENT_SECRET", ""),
+		OIDCRedirectURL:  getenv(fileEnv, "OIDC_REDIRECT_URL", "/auth/callback"),
 	}
 }
 
@@ -94,7 +94,8 @@ func (c Config) Validate() error {
 	return nil
 }
 
-func dotenv(paths ...string) {
+func dotenv(paths ...string) map[string]string {
+	values := map[string]string{}
 	for _, path := range paths {
 		file, err := os.Open(path)
 		if err != nil {
@@ -115,31 +116,34 @@ func dotenv(paths ...string) {
 			}
 
 			key = strings.TrimSpace(key)
-			if key == "" || os.Getenv(key) != "" {
+			if key == "" {
 				continue
 			}
 
-			value = parseEnvValue(strings.TrimSpace(value))
-			_ = os.Setenv(key, value)
+			values[key] = parseEnvValue(strings.TrimSpace(value))
 		}
 
 		_ = file.Close()
 	}
+	return values
 }
 
 func (c Config) CookieSecure() bool {
-	return boolEnv("COOKIE_SECURE", false)
+	return boolEnv(dotenv(".env"), "COOKIE_SECURE", false)
 }
 
-func getenv(k, def string) string {
+func getenv(fileEnv map[string]string, k, def string) string {
 	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	if v := fileEnv[k]; v != "" {
 		return v
 	}
 	return def
 }
 
-func durationMinutes(k string, def int) time.Duration {
-	v := strings.TrimSpace(os.Getenv(k))
+func durationMinutes(fileEnv map[string]string, k string, def int) time.Duration {
+	v := strings.TrimSpace(getenv(fileEnv, k, ""))
 	if v == "" {
 		return time.Duration(def) * time.Minute
 	}
@@ -153,8 +157,8 @@ func durationMinutes(k string, def int) time.Duration {
 	return d
 }
 
-func boolEnv(k string, def bool) bool {
-	v := strings.TrimSpace(os.Getenv(k))
+func boolEnv(fileEnv map[string]string, k string, def bool) bool {
+	v := strings.TrimSpace(getenv(fileEnv, k, ""))
 	if v == "" {
 		return def
 	}

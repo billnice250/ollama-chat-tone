@@ -33,6 +33,28 @@ BASIC_AUTH_PASSWORD="change-me"
 
 If the configured address is already in use, the app assumes another instance is already running, opens that URL in your browser, and exits cleanly.
 
+## Reload Configuration
+
+You can reload most `.env` settings without restarting the app. Use the sidebar `Reload config` button, or call the API:
+
+```bash
+curl -X POST http://localhost:8080/api/config/reload
+```
+
+When running in Docker, send `SIGHUP` to the running process:
+
+```bash
+docker kill --signal=HUP <container-name-or-id>
+```
+
+With Docker Compose:
+
+```bash
+docker compose kill -s HUP ollama-chat-tone
+```
+
+Reload updates runtime settings such as `APP_NAME`, `OLLAMA_URL`, `OLLAMA_TIMEOUT`, `DEFAULT_MODEL`, and auth settings. `ADDR` and `DB_PATH` still require a restart because the listener and database connection are already open.
+
 ## Run A Release Binary
 
 Download the matching archive from GitHub Releases, unpack it, create `.env`, then run the binary:

@@ -9,10 +9,13 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/billnice250/ollama-chat-tone/internal/auth"
 	"github.com/billnice250/ollama-chat-tone/internal/config"
@@ -29,23 +32,23 @@ func main() {
 	}
 	defer store.DB.Close()
 
-	authm, err := auth.New(contextBackground(), cfg, store)
+	app, err := newAppRuntime(contextBackground(), cfg, store)
 	if err != nil {
 		log.Fatal(err)
 	}
-	oc := ollama.New(cfg.OllamaURL, cfg.OllamaTimeout)
 	jobs := newJobManager()
+	watchReloadSignal(app)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })
-	mux.HandleFunc("/auth/login", authm.Login)
-	mux.HandleFunc("/auth/signup", authm.Signup)
-	mux.HandleFunc("/auth/callback", authm.Callback)
-	mux.HandleFunc("/auth/logout", authm.Logout)
+	mux.HandleFunc("/auth/login", app.Login)
+	mux.HandleFunc("/auth/signup", app.Signup)
+	mux.HandleFunc("/auth/callback", app.Callback)
+	mux.HandleFunc("/auth/logout", app.Logout)
 	mux.HandleFunc("/styles.css", servePublicStatic("styles.css"))
 	mux.HandleFunc("/logo.svg", servePublicStatic("logo.svg"))
-	mux.Handle("/", authm.RequireAuth(http.FileServer(http.FS(staticFiles()))))
-	mux.Handle("/api/account", authm.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/", app.RequireAuth(http.FileServer(http.FS(staticFiles()))))
+	mux.Handle("/api/account", app.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -63,12 +66,13 @@ func main() {
 		clearAppCookie(w, "session")
 		auth.WriteJSON(w, map[string]any{"deleted": true})
 	})))
-	mux.Handle("/api/config", authm.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/api/config", app.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
 		user := userFromRequest(r)
+		cfg := app.Config()
 		auth.WriteJSON(w, map[string]any{
 			"appName":      cfg.AppName,
 			"defaultModel": cfg.DefaultModel,
@@ -78,7 +82,32 @@ func main() {
 			"isAdmin":      isAdmin(r),
 		})
 	})))
-	mux.Handle("/api/admin/users", authm.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/api/config/reload", app.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if userFromRequest(r) != "anonymous" && !isAdmin(r) {
+			writeError(w, http.StatusForbidden, "admin access required")
+			return
+		}
+		cfg, warnings, err := app.Reload(r.Context())
+		if err != nil {
+			log.Printf("config reload error remote=%s err=%v", r.RemoteAddr, err)
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		log.Printf("config reloaded remote=%s app=%q auth=%s ollama=%s timeout=%s warnings=%s", r.RemoteAddr, cfg.AppName, cfg.AuthMode(), cfg.OllamaURL, cfg.OllamaTimeout, strings.Join(warnings, "; "))
+		auth.WriteJSON(w, map[string]any{
+			"reloaded":     true,
+			"appName":      cfg.AppName,
+			"defaultModel": cfg.DefaultModel,
+			"authMode":     cfg.AuthMode(),
+			"storageMode":  storageMode(cfg.AuthMode()),
+			"warnings":     warnings,
+		})
+	})))
+	mux.Handle("/api/admin/users", app.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !isAdmin(r) {
 			writeError(w, http.StatusForbidden, "admin access required")
 			return
@@ -94,7 +123,7 @@ func main() {
 		}
 		auth.WriteJSON(w, map[string]any{"users": users})
 	})))
-	mux.Handle("/api/admin/users/", authm.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/api/admin/users/", app.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !isAdmin(r) {
 			writeError(w, http.StatusForbidden, "admin access required")
 			return
@@ -125,7 +154,7 @@ func main() {
 		}
 		auth.WriteJSON(w, map[string]any{"approved": action == "approve"})
 	})))
-	mux.Handle("/api/conversations", authm.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/api/conversations", app.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := userFromRequest(r)
 		if user == "anonymous" {
 			writeError(w, http.StatusForbidden, "anonymous chats are stored in local browser storage")
@@ -160,20 +189,20 @@ func main() {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
 	})))
-	mux.Handle("/api/conversations/", authm.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/api/conversations/", app.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := userFromRequest(r)
 		if user == "anonymous" {
 			writeError(w, http.StatusForbidden, "anonymous chats are stored in local browser storage")
 			return
 		}
-		handleConversation(w, r, store, oc, jobs, user)
+		handleConversation(w, r, store, app.Ollama(), jobs, user)
 	})))
-	mux.Handle("/api/models", authm.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/api/models", app.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		models, err := oc.Models(r.Context())
+		models, err := app.Ollama().Models(r.Context())
 		if err != nil {
 			log.Printf("models error remote=%s err=%v", r.RemoteAddr, err)
 			writeError(w, http.StatusBadGateway, err.Error())
@@ -181,7 +210,7 @@ func main() {
 		}
 		auth.WriteJSON(w, map[string]any{"models": models})
 	})))
-	mux.Handle("/api/chat", authm.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/api/chat", app.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -193,10 +222,10 @@ func main() {
 			return
 		}
 		if req.Model == "" {
-			req.Model = cfg.DefaultModel
+			req.Model = app.Config().DefaultModel
 		}
 		if req.Stream {
-			if err := streamChat(w, r, oc, req); err != nil {
+			if err := streamChat(w, r, app.Ollama(), req); err != nil {
 				if errors.Is(err, context.Canceled) {
 					log.Printf("chat stream canceled remote=%s model=%q", r.RemoteAddr, req.Model)
 				} else {
@@ -205,7 +234,7 @@ func main() {
 			}
 			return
 		}
-		res, err := oc.Chat(r.Context(), req)
+		res, err := app.Ollama().Chat(r.Context(), req)
 		if err != nil {
 			log.Printf("chat error remote=%s model=%q err=%v", r.RemoteAddr, req.Model, err)
 			writeError(w, http.StatusBadGateway, err.Error())
@@ -242,6 +271,114 @@ func main() {
 }
 
 func contextBackground() context.Context { return context.Background() }
+
+func watchReloadSignal(app *appRuntime) {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGHUP)
+	go func() {
+		for range signals {
+			cfg, warnings, err := app.Reload(context.Background())
+			if err != nil {
+				log.Printf("config reload signal error err=%v", err)
+				continue
+			}
+			log.Printf("config reloaded signal app=%q auth=%s ollama=%s timeout=%s warnings=%s", cfg.AppName, cfg.AuthMode(), cfg.OllamaURL, cfg.OllamaTimeout, strings.Join(warnings, "; "))
+		}
+	}()
+}
+
+type appRuntime struct {
+	mu    sync.RWMutex
+	cfg   config.Config
+	authm *auth.Manager
+	oc    *ollama.Client
+	store *db.Store
+}
+
+func newAppRuntime(ctx context.Context, cfg config.Config, store *db.Store) (*appRuntime, error) {
+	authm, err := auth.New(ctx, cfg, store)
+	if err != nil {
+		return nil, err
+	}
+	return &appRuntime{
+		cfg:   cfg,
+		authm: authm,
+		oc:    ollama.New(cfg.OllamaURL, cfg.OllamaTimeout),
+		store: store,
+	}, nil
+}
+
+func (a *appRuntime) Config() config.Config {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.cfg
+}
+
+func (a *appRuntime) Ollama() *ollama.Client {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.oc
+}
+
+func (a *appRuntime) Auth() *auth.Manager {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.authm
+}
+
+func (a *appRuntime) Reload(ctx context.Context) (config.Config, []string, error) {
+	next := config.Load()
+
+	a.mu.RLock()
+	current := a.cfg
+	a.mu.RUnlock()
+
+	var warnings []string
+	if next.Addr != current.Addr {
+		warnings = append(warnings, "ADDR changes require restart")
+		next.Addr = current.Addr
+	}
+	if next.DBPath != current.DBPath {
+		warnings = append(warnings, "DB_PATH changes require restart")
+		next.DBPath = current.DBPath
+	}
+
+	authm, err := auth.New(ctx, next, a.store)
+	if err != nil {
+		return current, warnings, err
+	}
+	oc := ollama.New(next.OllamaURL, next.OllamaTimeout)
+
+	a.mu.Lock()
+	a.cfg = next
+	a.authm = authm
+	a.oc = oc
+	a.mu.Unlock()
+
+	return next, warnings, nil
+}
+
+func (a *appRuntime) RequireAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a.Auth().RequireAuth(next).ServeHTTP(w, r)
+	})
+}
+
+func (a *appRuntime) Login(w http.ResponseWriter, r *http.Request) {
+	a.Auth().Login(w, r)
+}
+
+func (a *appRuntime) Signup(w http.ResponseWriter, r *http.Request) {
+	a.Auth().Signup(w, r)
+}
+
+func (a *appRuntime) Callback(w http.ResponseWriter, r *http.Request) {
+	a.Auth().Callback(w, r)
+}
+
+func (a *appRuntime) Logout(w http.ResponseWriter, r *http.Request) {
+	a.Auth().Logout(w, r)
+}
 
 func servePublicStatic(name string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="en" data-theme="dark">
+
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,6 +8,7 @@
 	<link rel="icon" href="/logo.svg" type="image/svg+xml">
 	<link rel="stylesheet" href="/styles.css">
 </head>
+
 <body>
 	<div class="app">
 		<aside class="sidebar">
@@ -18,8 +20,16 @@
 
 			<button id="new-chat" class="new-chat" type="button">New chat</button>
 			<div id="chat-list" class="chat-list"></div>
+			<div class="sidebar-actions" aria-label="App actions">
+				<button id="reload-config" class="secondary-button" type="button">Reload config</button>
+				<button id="refresh-models" class="secondary-button" type="button">Refresh models</button>
+				<button class="secondary-button theme-toggle" type="button" aria-label="Toggle dark mode">Theme</button>
+				<a id="admin-link" class="sidebar-action-link hidden" href="/admin.html">Admin</a>
+				<a class="sidebar-action-link" href="/auth/logout">Logout</a>
+			</div>
 			<nav class="sidebar-links" aria-label="External links">
-				<a href="https://blog.billnice.it/#contact" target="_blank" rel="noopener noreferrer">Contact Developer</a>
+				<a href="https://blog.billnice.it/#contact" target="_blank" rel="noopener noreferrer">Contact
+					Developer</a>
 				<button id="delete-account" class="account-delete hidden" type="button">Delete account</button>
 			</nav>
 		</aside>
@@ -28,21 +38,10 @@
 		<main class="main">
 			<header class="topbar">
 				<div class="title">
-					<button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-expanded="false">Chats</button>
+					<button id="sidebar-toggle" class="sidebar-toggle" type="button"
+						aria-expanded="false">Chats</button>
 					<h2 id="chat-title">New chat</h2>
 					<p id="chat-meta">No messages yet</p>
-				</div>
-
-				<div class="controls">
-					<select id="model" aria-label="Model"></select>
-					<label class="think-toggle">
-						<input id="think-toggle" type="checkbox">
-						<span>Think</span>
-					</label>
-					<button id="refresh-models" class="secondary-button" type="button">Refresh</button>
-					<button class="secondary-button theme-toggle" type="button" aria-label="Toggle dark mode">Theme</button>
-					<a id="admin-link" class="admin-link hidden" href="/admin.html">Admin</a>
-					<a class="logout" href="/auth/logout">Logout</a>
 				</div>
 			</header>
 
@@ -51,7 +50,16 @@
 
 			<form id="composer" class="composer">
 				<div class="composer-inner">
-					<textarea id="prompt" placeholder="Ask something..."></textarea>
+					<div class="prompt-box">
+						<textarea id="prompt" placeholder="Ask something..."></textarea>
+						<label class="think-toggle">
+							<input id="think-toggle" type="checkbox">
+							<span>Reasoning</span>
+						</label>
+					</div>
+					<div class="composer-controls">
+						<select id="model" aria-label="Model"></select>
+					</div>
 					<button id="send" class="send" type="submit">Send</button>
 				</div>
 				<div class="footer-note">Press Cmd+Enter or Ctrl+Enter to send.</div>
@@ -62,4 +70,5 @@
 	<script src="/theme.js"></script>
 	<script src="/app.js"></script>
 </body>
+
 </html>
