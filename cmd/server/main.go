@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"syscall"
@@ -27,7 +28,7 @@ import (
 	"github.com/billnice250/ollama-chat-tone/internal/static"
 )
 
-var version = "dev"
+var version = ""
 
 func main() {
 	cfg := config.Load()
@@ -81,7 +82,7 @@ func main() {
 		cfg := app.Config()
 		auth.WriteJSON(w, map[string]any{
 			"appName":      cfg.AppName,
-			"version":      version,
+			"version":      appVersion(),
 			"defaultModel": cfg.DefaultModel,
 			"authMode":     cfg.AuthMode(),
 			"storageMode":  storageMode(cfg.AuthMode()),
@@ -108,7 +109,7 @@ func main() {
 		auth.WriteJSON(w, map[string]any{
 			"reloaded":     true,
 			"appName":      cfg.AppName,
-			"version":      version,
+			"version":      appVersion(),
 			"defaultModel": cfg.DefaultModel,
 			"authMode":     cfg.AuthMode(),
 			"storageMode":  storageMode(cfg.AuthMode()),
@@ -279,6 +280,35 @@ func main() {
 }
 
 func contextBackground() context.Context { return context.Background() }
+
+func appVersion() string {
+	if version != "" && version != "dev" {
+		return version
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "dev"
+	}
+	var revision, modified string
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			revision = setting.Value
+		case "vcs.modified":
+			modified = setting.Value
+		}
+	}
+	if revision == "" {
+		return "dev"
+	}
+	if len(revision) > 12 {
+		revision = revision[:12]
+	}
+	if modified == "true" {
+		return revision + "-dirty"
+	}
+	return revision
+}
 
 func watchReloadSignal(app *appRuntime) {
 	signals := make(chan os.Signal, 1)

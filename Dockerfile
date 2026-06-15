@@ -2,7 +2,7 @@
 
 FROM golang:1.25-alpine AS build
 WORKDIR /src
-ARG VERSION=dev
+ARG VERSION=""
 
 RUN apk add --no-cache ca-certificates
 
@@ -13,7 +13,7 @@ COPY . .
 
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -trimpath \
-    -ldflags="-s -w -X main.version=${VERSION}" \
+    -ldflags="-s -w ${VERSION:+-X main.version=${VERSION}}" \
     -o /out/server \
     ./cmd/server
 
