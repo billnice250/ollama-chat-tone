@@ -64,6 +64,7 @@ func main() {
 		}
 		clearAppCookie(w, "email")
 		clearAppCookie(w, "session")
+		clearAppCookie(w, "state")
 		auth.WriteJSON(w, map[string]any{"deleted": true})
 	})))
 	mux.Handle("/api/config", app.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

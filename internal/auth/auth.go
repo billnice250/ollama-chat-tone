@@ -83,6 +83,7 @@ func (m *Manager) RequireAuth(next http.Handler) http.Handler {
 			if ok {
 				user, err := m.store.GetUser(r.Context(), username)
 				if err == nil && user.Approved {
+					_ = m.store.TouchUser(r.Context(), user.Username)
 					ctx := context.WithValue(r.Context(), EmailKey, user.Username)
 					ctx = context.WithValue(ctx, AdminKey, user.IsAdmin)
 					next.ServeHTTP(w, r.WithContext(ctx))
@@ -97,6 +98,7 @@ func (m *Manager) RequireAuth(next http.Handler) http.Handler {
 			if email != "" {
 				user, err := m.store.GetUser(r.Context(), email)
 				if err == nil && user.Approved {
+					_ = m.store.TouchUser(r.Context(), user.Username)
 					ctx := context.WithValue(r.Context(), EmailKey, user.Username)
 					ctx = context.WithValue(ctx, AdminKey, user.IsAdmin)
 					next.ServeHTTP(w, r.WithContext(ctx))

@@ -31,6 +31,7 @@ function renderUsers(users) {
 	el.users.replaceChildren(...users.map((user) => {
 		const row = document.createElement('article');
 		row.className = 'user-row';
+		row.classList.toggle('active-user', Boolean(user.active));
 
 		const meta = document.createElement('div');
 		meta.className = 'user-meta';
@@ -38,7 +39,11 @@ function renderUsers(users) {
 		name.textContent = user.username;
 		const status = document.createElement('span');
 		status.textContent = user.isAdmin ? 'admin' : (user.approved ? 'approved' : 'pending approval');
-		meta.append(name, status);
+		const visit = document.createElement('span');
+		visit.textContent = user.lastSeenAt
+			? `${user.active ? 'active now' : 'last visit'}: ${formatDate(user.lastSeenAt)}`
+			: 'last visit: never';
+		meta.append(name, status, visit);
 
 		const action = document.createElement('button');
 		action.type = 'button';
@@ -56,6 +61,15 @@ function renderUsers(users) {
 	}));
 }
 
+function formatDate(value) {
+	const normalized = value.includes('T') ? value : value.replace(' ', 'T') + 'Z';
+	const date = new Date(normalized);
+	if (Number.isNaN(date.getTime())) {
+		return value;
+	}
+	return date.toLocaleString();
+}
+
 async function load() {
 	const cfg = await fetchJSON('/api/config');
 	document.title = `${cfg.appName} Admin`;
@@ -67,7 +81,9 @@ async function load() {
 
 	const data = await fetchJSON('/api/admin/users');
 	renderUsers(data.users || []);
-	el.status.textContent = `${(data.users || []).length} users`;
+	const users = data.users || [];
+	const active = users.filter((user) => user.active).length;
+	el.status.textContent = `${users.length} users, ${active} active`;
 }
 
 load().catch((err) => showError(err.message));

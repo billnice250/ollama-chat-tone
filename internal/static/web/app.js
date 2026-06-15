@@ -22,6 +22,9 @@ const el = {
 	composer: document.getElementById('composer'),
 	newChat: document.getElementById('new-chat'),
 	deleteAccount: document.getElementById('delete-account'),
+	deleteAccountModal: document.getElementById('delete-account-modal'),
+	cancelDeleteAccount: document.getElementById('cancel-delete-account'),
+	confirmDeleteAccount: document.getElementById('confirm-delete-account'),
 };
 
 const state = {
@@ -630,13 +633,22 @@ async function deleteAccount() {
 	if (state.currentUser === 'anonymous') {
 		return;
 	}
-	const confirmation = prompt(`Type DELETE to permanently delete ${state.currentUser} and all conversations.`);
-	if (confirmation !== 'DELETE') {
-		return;
-	}
 	await fetchJSON('/api/account', { method: 'DELETE' });
 	localStorage.removeItem(localStorageKey);
-	window.location.href = '/auth/login';
+	window.location.replace('/auth/logout');
+}
+
+function openDeleteAccountModal() {
+	if (state.currentUser === 'anonymous') {
+		return;
+	}
+	closeMobileSidebar();
+	el.deleteAccountModal.classList.remove('hidden');
+	el.cancelDeleteAccount.focus();
+}
+
+function closeDeleteAccountModal() {
+	el.deleteAccountModal.classList.add('hidden');
 }
 
 function setStreaming(streaming) {
@@ -976,7 +988,24 @@ el.sidebarToggle.addEventListener('click', () => {
 el.menuBackdrop.addEventListener('click', closeMobileSidebar);
 
 el.deleteAccount.addEventListener('click', () => {
-	deleteAccount().catch((err) => showError(err.message));
+	openDeleteAccountModal();
+});
+
+el.cancelDeleteAccount.addEventListener('click', closeDeleteAccountModal);
+
+el.deleteAccountModal.addEventListener('click', (event) => {
+	if (event.target === el.deleteAccountModal) {
+		closeDeleteAccountModal();
+	}
+});
+
+el.confirmDeleteAccount.addEventListener('click', () => {
+	el.confirmDeleteAccount.disabled = true;
+	deleteAccount().catch((err) => {
+		el.confirmDeleteAccount.disabled = false;
+		closeDeleteAccountModal();
+		showError(err.message);
+	});
 });
 
 el.reloadConfig.addEventListener('click', async () => {

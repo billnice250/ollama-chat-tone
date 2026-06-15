@@ -53,6 +53,8 @@ type User struct {
 	PasswordHash string `json:"-"`
 	Approved     bool   `json:"approved"`
 	IsAdmin      bool   `json:"isAdmin"`
+	Active       bool   `json:"active"`
+	LastSeenAt   string `json:"lastSeenAt"`
 	CreatedAt    string `json:"createdAt"`
 }
 
@@ -83,6 +85,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   approved INTEGER NOT NULL DEFAULT 0,
   is_admin INTEGER NOT NULL DEFAULT 0,
+  last_seen_at DATETIME DEFAULT NULL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS chat_jobs (
@@ -114,6 +117,7 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE messages ADD COLUMN model TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE users ADD COLUMN approved INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE users ADD COLUMN last_seen_at DATETIME DEFAULT NULL`,
 		`ALTER TABLE chat_jobs ADD COLUMN message_id INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, stmt := range stmts {
@@ -155,24 +159,31 @@ ON CONFLICT(username) DO NOTHING`, username)
 
 func (s *Store) GetUser(ctx context.Context, username string) (*User, error) {
 	var u User
-	var approved, isAdmin int
+	var approved, isAdmin, active int
+	var lastSeen sql.NullString
 	err := s.DB.QueryRowContext(ctx, `
-SELECT username, password_hash, approved, is_admin, created_at
+SELECT username, password_hash, approved, is_admin, last_seen_at, created_at,
+       CASE WHEN last_seen_at IS NOT NULL AND datetime(last_seen_at) >= datetime('now', '-5 minutes') THEN 1 ELSE 0 END
 FROM users
-WHERE username = ?`, username).Scan(&u.Username, &u.PasswordHash, &approved, &isAdmin, &u.CreatedAt)
+WHERE username = ?`, username).Scan(&u.Username, &u.PasswordHash, &approved, &isAdmin, &lastSeen, &u.CreatedAt, &active)
 	if err != nil {
 		return nil, err
 	}
 	u.Approved = approved == 1
 	u.IsAdmin = isAdmin == 1
+	if lastSeen.Valid {
+		u.LastSeenAt = lastSeen.String
+	}
+	u.Active = active == 1
 	return &u, nil
 }
 
 func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-SELECT username, password_hash, approved, is_admin, created_at
+SELECT username, password_hash, approved, is_admin, last_seen_at, created_at,
+       CASE WHEN last_seen_at IS NOT NULL AND datetime(last_seen_at) >= datetime('now', '-5 minutes') THEN 1 ELSE 0 END AS active
 FROM users
-ORDER BY is_admin DESC, approved ASC, created_at DESC`)
+ORDER BY is_admin DESC, active DESC, approved ASC, COALESCE(last_seen_at, created_at) DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -181,15 +192,25 @@ ORDER BY is_admin DESC, approved ASC, created_at DESC`)
 	var out []User
 	for rows.Next() {
 		var u User
-		var approved, isAdmin int
-		if err := rows.Scan(&u.Username, &u.PasswordHash, &approved, &isAdmin, &u.CreatedAt); err != nil {
+		var approved, isAdmin, active int
+		var lastSeen sql.NullString
+		if err := rows.Scan(&u.Username, &u.PasswordHash, &approved, &isAdmin, &lastSeen, &u.CreatedAt, &active); err != nil {
 			return nil, err
 		}
 		u.Approved = approved == 1
 		u.IsAdmin = isAdmin == 1
+		u.Active = active == 1
+		if lastSeen.Valid {
+			u.LastSeenAt = lastSeen.String
+		}
 		out = append(out, u)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) TouchUser(ctx context.Context, username string) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE users SET last_seen_at = CURRENT_TIMESTAMP WHERE username = ?`, username)
+	return err
 }
 
 func (s *Store) ApproveUser(ctx context.Context, username string) error {
