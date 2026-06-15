@@ -45,6 +45,24 @@ func main() {
 	mux.HandleFunc("/styles.css", servePublicStatic("styles.css"))
 	mux.HandleFunc("/logo.svg", servePublicStatic("logo.svg"))
 	mux.Handle("/", authm.RequireAuth(http.FileServer(http.FS(staticFiles()))))
+	mux.Handle("/api/account", authm.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		user := userFromRequest(r)
+		if user == "anonymous" {
+			writeError(w, http.StatusForbidden, "anonymous account cannot be deleted")
+			return
+		}
+		if err := store.DeleteAccount(r.Context(), user); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		clearAppCookie(w, "email")
+		clearAppCookie(w, "session")
+		auth.WriteJSON(w, map[string]any{"deleted": true})
+	})))
 	mux.Handle("/api/config", authm.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -83,7 +101,7 @@ func main() {
 		}
 		path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/users/"), "/")
 		username, action, ok := strings.Cut(path, "/")
-		if !ok || action != "approve" || username == "" {
+		if !ok || username == "" || (action != "approve" && action != "revoke") {
 			writeError(w, http.StatusNotFound, "user not found")
 			return
 		}
@@ -91,11 +109,21 @@ func main() {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		if err := store.ApproveUser(r.Context(), username); err != nil {
+		var err error
+		if action == "approve" {
+			err = store.ApproveUser(r.Context(), username)
+		} else {
+			if username == userFromRequest(r) {
+				writeError(w, http.StatusBadRequest, "cannot revoke your own account")
+				return
+			}
+			err = store.RevokeUser(r.Context(), username)
+		}
+		if err != nil {
 			writeDBError(w, err, "user not found")
 			return
 		}
-		auth.WriteJSON(w, map[string]any{"approved": true})
+		auth.WriteJSON(w, map[string]any{"approved": action == "approve"})
 	})))
 	mux.Handle("/api/conversations", authm.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := userFromRequest(r)
@@ -500,6 +528,17 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+func clearAppCookie(w http.ResponseWriter, name string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     name,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
 }
 
 func streamChat(w http.ResponseWriter, r *http.Request, oc *ollama.Client, req ollama.ChatRequest) error {

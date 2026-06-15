@@ -43,10 +43,11 @@ function renderUsers(users) {
 		const action = document.createElement('button');
 		action.type = 'button';
 		action.className = 'secondary-button';
-		action.textContent = user.approved ? 'Approved' : 'Approve';
-		action.disabled = user.approved;
+		action.textContent = user.approved ? 'Revoke' : 'Approve';
+		action.disabled = user.isAdmin;
 		action.addEventListener('click', async () => {
-			await fetchJSON(`/api/admin/users/${encodeURIComponent(user.username)}/approve`, { method: 'POST' });
+			const endpoint = user.approved ? 'revoke' : 'approve';
+			await fetchJSON(`/api/admin/users/${encodeURIComponent(user.username)}/${endpoint}`, { method: 'POST' });
 			await load();
 		});
 

@@ -231,7 +231,6 @@ OIDC_ISSUER="https://accounts.google.com"
 OIDC_CLIENT_ID="your-client-id"
 OIDC_CLIENT_SECRET="your-client-secret"
 OIDC_REDIRECT_URL="/auth/callback"
-ALLOWED_EMAILS="you@example.com"
 ```
 
-When OIDC settings are available, the login page shows an OAuth button. If local auth is also configured, users can choose either local login or OAuth.
+When OIDC settings are available, the login page shows an OAuth button. If local auth is also configured, users can choose either local login or OAuth. New OAuth users are registered as pending users until an admin approves them.

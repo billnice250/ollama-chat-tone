@@ -95,10 +95,14 @@ func (m *Manager) RequireAuth(next http.Handler) http.Handler {
 		if oidcAvailable(m.cfg) {
 			email := readCookie(r, "email")
 			if email != "" {
-				ctx := context.WithValue(r.Context(), EmailKey, email)
-				ctx = context.WithValue(ctx, AdminKey, false)
-				next.ServeHTTP(w, r.WithContext(ctx))
-				return
+				user, err := m.store.GetUser(r.Context(), email)
+				if err == nil && user.Approved {
+					ctx := context.WithValue(r.Context(), EmailKey, user.Username)
+					ctx = context.WithValue(ctx, AdminKey, user.IsAdmin)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+				clearCookie(w, "email")
 			}
 		}
 
@@ -202,8 +206,25 @@ func (m *Manager) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email := strings.ToLower(claims.Email)
-	if len(m.cfg.AllowedEmails) > 0 && !m.cfg.AllowedEmails[email] {
-		http.Error(w, "email not allowed", 403)
+	if email == "" {
+		http.Error(w, "missing email claim", 500)
+		return
+	}
+	user, err := m.store.EnsurePendingUser(r.Context(), email)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	if !user.Approved {
+		clearCookie(w, "email")
+		m.writeAuthPage(w, authPageData{
+			AppName:    m.cfg.AppName,
+			Title:      "Approval pending",
+			Message:    "Your account was registered and is waiting for admin approval.",
+			ShowOAuth:  true,
+			OAuthHref:  "/auth/login?provider=oidc",
+			OAuthLabel: "Try again",
+		})
 		return
 	}
 	setCookie(w, "email", email, false)

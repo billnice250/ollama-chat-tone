@@ -142,6 +142,17 @@ VALUES (?, ?, 0, 0, CURRENT_TIMESTAMP)`, username, passwordHash)
 	return err
 }
 
+func (s *Store) EnsurePendingUser(ctx context.Context, username string) (*User, error) {
+	_, err := s.DB.ExecContext(ctx, `
+INSERT INTO users (username, password_hash, approved, is_admin, created_at)
+VALUES (?, '', 0, 0, CURRENT_TIMESTAMP)
+ON CONFLICT(username) DO NOTHING`, username)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetUser(ctx, username)
+}
+
 func (s *Store) GetUser(ctx context.Context, username string) (*User, error) {
 	var u User
 	var approved, isAdmin int
@@ -182,7 +193,19 @@ ORDER BY is_admin DESC, approved ASC, created_at DESC`)
 }
 
 func (s *Store) ApproveUser(ctx context.Context, username string) error {
-	res, err := s.DB.ExecContext(ctx, `UPDATE users SET approved = 1 WHERE username = ?`, username)
+	return s.SetUserApproved(ctx, username, true)
+}
+
+func (s *Store) RevokeUser(ctx context.Context, username string) error {
+	return s.SetUserApproved(ctx, username, false)
+}
+
+func (s *Store) SetUserApproved(ctx context.Context, username string, approved bool) error {
+	value := 0
+	if approved {
+		value = 1
+	}
+	res, err := s.DB.ExecContext(ctx, `UPDATE users SET approved = ? WHERE username = ? AND is_admin = 0`, value, username)
 	if err != nil {
 		return err
 	}
@@ -340,6 +363,50 @@ func (s *Store) DeleteConversation(ctx context.Context, user, id string) error {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM chat_jobs WHERE conversation_id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) DeleteAccount(ctx context.Context, user string) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM conversations WHERE user_email = ?`, user)
+	if err != nil {
+		return err
+	}
+	var conversationIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		conversationIDs = append(conversationIDs, id)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, id := range conversationIDs {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE conversation_id = ?`, id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM chat_jobs WHERE conversation_id = ?`, id); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM conversations WHERE user_email = ?`, user); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM users WHERE username = ?`, user); err != nil {
 		return err
 	}
 	return tx.Commit()

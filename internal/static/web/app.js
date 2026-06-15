@@ -6,6 +6,7 @@ const el = {
 	currentUser: document.getElementById('current-user'),
 	sidebar: document.querySelector('.sidebar'),
 	sidebarToggle: document.getElementById('sidebar-toggle'),
+	menuBackdrop: document.getElementById('menu-backdrop'),
 	chatList: document.getElementById('chat-list'),
 	chatTitle: document.getElementById('chat-title'),
 	chatMeta: document.getElementById('chat-meta'),
@@ -19,6 +20,7 @@ const el = {
 	send: document.getElementById('send'),
 	composer: document.getElementById('composer'),
 	newChat: document.getElementById('new-chat'),
+	deleteAccount: document.getElementById('delete-account'),
 };
 
 const state = {
@@ -613,7 +615,27 @@ async function deleteChat(id) {
 
 function closeMobileSidebar() {
 	el.sidebar.classList.remove('open');
+	el.menuBackdrop.classList.remove('open');
 	el.sidebarToggle.setAttribute('aria-expanded', 'false');
+}
+
+function toggleMobileSidebar() {
+	const open = el.sidebar.classList.toggle('open');
+	el.menuBackdrop.classList.toggle('open', open);
+	el.sidebarToggle.setAttribute('aria-expanded', String(open));
+}
+
+async function deleteAccount() {
+	if (state.currentUser === 'anonymous') {
+		return;
+	}
+	const confirmation = prompt(`Type DELETE to permanently delete ${state.currentUser} and all conversations.`);
+	if (confirmation !== 'DELETE') {
+		return;
+	}
+	await fetchJSON('/api/account', { method: 'DELETE' });
+	localStorage.removeItem(localStorageKey);
+	window.location.href = '/auth/login';
 }
 
 function setStreaming(streaming) {
@@ -811,6 +833,7 @@ async function loadConfig() {
 	el.appName.textContent = state.appName;
 	el.currentUser.textContent = state.currentUser;
 	el.adminLink.classList.toggle('hidden', !state.isAdmin);
+	el.deleteAccount.classList.toggle('hidden', state.currentUser === 'anonymous' || state.authMode === 'none');
 }
 
 async function loadModels() {
@@ -945,8 +968,13 @@ el.newChat.addEventListener('click', () => {
 });
 
 el.sidebarToggle.addEventListener('click', () => {
-	const open = el.sidebar.classList.toggle('open');
-	el.sidebarToggle.setAttribute('aria-expanded', String(open));
+	toggleMobileSidebar();
+});
+
+el.menuBackdrop.addEventListener('click', closeMobileSidebar);
+
+el.deleteAccount.addEventListener('click', () => {
+	deleteAccount().catch((err) => showError(err.message));
 });
 
 el.refreshModels.addEventListener('click', () => {

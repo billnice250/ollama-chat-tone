@@ -179,20 +179,39 @@ button {
 .sidebar-links {
 	flex: none;
 	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
 	gap: 12px;
 	padding: 12px 18px 18px;
 	border-top: 1px solid var(--color-sidebar-border);
 }
 
-.sidebar-links a {
+.sidebar-links a,
+.account-delete {
 	color: var(--color-sidebar-muted);
 	font-size: 13px;
 	font-weight: 650;
 	text-decoration: none;
 }
 
-.sidebar-links a:hover {
+.account-delete {
+	padding: 0;
+	background: transparent;
+	color: var(--color-delete);
+}
+
+.sidebar-links a:hover,
+.account-delete:hover {
 	color: var(--color-sidebar-text);
+}
+
+.menu-backdrop {
+	display: none;
+	position: fixed;
+	z-index: 15;
+	inset: 0;
+	background: rgba(2, 6, 23, .62);
+	backdrop-filter: blur(2px);
 }
 
 .chat-item {
@@ -814,19 +833,23 @@ textarea::placeholder {
 
 	.sidebar {
 		position: fixed;
-		z-index: 20;
+		z-index: 30;
 		inset: 0 auto 0 0;
-		width: min(86vw, var(--sidebar-width));
+		width: min(88vw, 320px);
 		height: 100dvh;
 		max-height: none;
 		transform: translateX(-100%);
 		transition: transform .18s ease;
-		border-right: 0;
+		border-right: 1px solid var(--color-sidebar-border);
 		box-shadow: var(--shadow-overlay);
 	}
 
 	.sidebar.open {
 		transform: translateX(0);
+	}
+
+	.menu-backdrop.open {
+		display: block;
 	}
 
 	.main {
@@ -835,29 +858,60 @@ textarea::placeholder {
 	}
 
 	.topbar {
-		align-items: flex-start;
-		flex-direction: column;
+		display: grid;
+		grid-template-columns: 1fr;
+		align-items: stretch;
+		gap: 10px;
+		padding: 12px;
 	}
 
 	.sidebar-toggle {
 		display: inline-flex;
 		align-items: center;
+		justify-content: center;
+		width: max-content;
+		margin-bottom: 6px;
 	}
 
 	.controls {
 		width: 100%;
-		justify-content: flex-start;
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+		align-items: stretch;
+		gap: 8px;
+	}
+
+	select {
+		grid-column: 1 / -1;
 	}
 
 	select,
 	.think-toggle,
-	.secondary-button {
+	.secondary-button,
+	.logout,
+	.admin-link {
 		width: 100%;
 		min-width: 0;
 	}
 
+	.logout,
+	.admin-link {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-height: 36px;
+		padding: 0 10px;
+		border: 1px solid var(--color-line);
+		border-radius: var(--radius);
+		background: var(--color-surface);
+	}
+
+	.messages {
+		padding: 18px 12px;
+	}
+
 	.bubble {
-		max-width: 92%;
+		max-width: 96%;
 	}
 
 	.composer-inner {
