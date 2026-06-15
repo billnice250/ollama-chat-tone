@@ -546,10 +546,10 @@ WHERE user_email = ? AND conversation_id = ? AND id = ? AND status = 'running'`,
 }
 
 func (s *Store) CompleteChatJob(ctx context.Context, user, conversationID, id, content, thinking, model string) (*Message, error) {
-	return retryBusyResult(ctx, func() (*Message, error) {
+	messageID, err := retryBusyResult(ctx, func() (int64, error) {
 		tx, err := s.DB.BeginTx(ctx, nil)
 		if err != nil {
-			return nil, err
+			return 0, err
 		}
 		defer tx.Rollback()
 
@@ -557,37 +557,33 @@ func (s *Store) CompleteChatJob(ctx context.Context, user, conversationID, id, c
 INSERT INTO messages (conversation_id, role, content, thinking, model, created_at)
 VALUES (?, 'assistant', ?, ?, ?, CURRENT_TIMESTAMP)`, conversationID, content, thinking, model)
 		if err != nil {
-			return nil, err
+			return 0, err
 		}
 		messageID, err := res.LastInsertId()
 		if err != nil {
-			return nil, err
+			return 0, err
 		}
 		if _, err := tx.ExecContext(ctx, `
 UPDATE chat_jobs
 SET status = 'complete', content = ?, thinking = ?, model = ?, message_id = ?, updated_at = CURRENT_TIMESTAMP
 WHERE user_email = ? AND conversation_id = ? AND id = ?`, content, thinking, model, messageID, user, conversationID, id); err != nil {
-			return nil, err
+			return 0, err
 		}
 		if _, err := tx.ExecContext(ctx, `
 UPDATE conversations
 SET updated_at = CURRENT_TIMESTAMP
 WHERE user_email = ? AND id = ?`, user, conversationID); err != nil {
-			return nil, err
+			return 0, err
 		}
 		if err := tx.Commit(); err != nil {
-			return nil, err
+			return 0, err
 		}
-		return &Message{
-			ID:             messageID,
-			ConversationID: conversationID,
-			Role:           "assistant",
-			Content:        content,
-			Thinking:       thinking,
-			Model:          model,
-			CreatedAt:      time.Now().UTC().Format(sqliteTimeLayout),
-		}, nil
+		return messageID, nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return s.GetMessage(ctx, user, conversationID, messageID)
 }
 
 func (s *Store) FailChatJob(ctx context.Context, user, conversationID, id, message string) error {
