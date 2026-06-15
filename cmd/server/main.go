@@ -713,15 +713,21 @@ func runChatJob(ctx context.Context, store *db.Store, oc *ollama.Client, jobs *j
 		return store.UpdateChatJob(context.Background(), user, conversationID, jobID, content, thinking)
 	})
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			_ = store.CancelChatJob(context.Background(), user, conversationID, jobID)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			if cancelErr := store.CancelChatJob(context.Background(), user, conversationID, jobID); cancelErr != nil {
+				log.Printf("runChatJob: cancel job=%s err=%v", jobID, cancelErr)
+			}
 			return
 		}
-		_ = store.FailChatJob(context.Background(), user, conversationID, jobID, err.Error())
+		if failErr := store.FailChatJob(context.Background(), user, conversationID, jobID, err.Error()); failErr != nil {
+			log.Printf("runChatJob: fail job=%s err=%v", jobID, failErr)
+		}
 		return
 	}
 	if _, err := store.CompleteChatJob(context.Background(), user, conversationID, jobID, content, thinking, model); err != nil {
-		_ = store.FailChatJob(context.Background(), user, conversationID, jobID, err.Error())
+		if failErr := store.FailChatJob(context.Background(), user, conversationID, jobID, err.Error()); failErr != nil {
+			log.Printf("runChatJob: fail job=%s after complete err=%v", jobID, failErr)
+		}
 	}
 }
 
