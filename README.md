@@ -20,6 +20,7 @@ DB_PATH="./app.db"
 
 OLLAMA_URL="http://localhost:11434"
 OLLAMA_TIMEOUT="5"
+JOB_IDLE_TIMEOUT="45s"
 DEFAULT_MODEL="llama3.2"
 OPEN_BROWSER="false"
 
@@ -28,6 +29,8 @@ BASIC_AUTH_PASSWORD="change-me"
 ```
 
 `OLLAMA_TIMEOUT` defaults to `5` minutes. It also accepts Go duration values such as `30s`, `5m`, or `1h`.
+
+`JOB_IDLE_TIMEOUT` defaults to `45s`. If a streamed model response stops producing output for longer than this window, the server marks the job as failed so the conversation does not remain stuck.
 
 `ADDR=":0"` is supported. The app binds a free port and logs the actual URL.
 
@@ -53,7 +56,7 @@ With Docker Compose:
 docker compose kill -s HUP ollama-chat-tone
 ```
 
-Reload updates runtime settings such as `APP_NAME`, `OLLAMA_URL`, `OLLAMA_TIMEOUT`, `DEFAULT_MODEL`, and auth settings. `ADDR` and `DB_PATH` still require a restart because the listener and database connection are already open.
+Reload updates runtime settings such as `APP_NAME`, `OLLAMA_URL`, `OLLAMA_TIMEOUT`, `JOB_IDLE_TIMEOUT`, `DEFAULT_MODEL`, and auth settings. `ADDR` and `DB_PATH` still require a restart because the listener and database connection are already open.
 
 ## Run A Release Binary
 

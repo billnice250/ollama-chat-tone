@@ -14,6 +14,13 @@ import (
 
 type Store struct{ DB *sql.DB }
 
+const (
+	sqliteBusyTimeout  = 5 * time.Second
+	sqliteRetryBase    = 50 * time.Millisecond
+	sqliteRetryMax     = 5
+	sqliteTimeLayout   = "2006-01-02 15:04:05"
+)
+
 type Conversation struct {
 	ID           string    `json:"id"`
 	UserEmail    string    `json:"-"`
@@ -63,6 +70,10 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	configureSQLite(db)
+	if err := applySQLitePragmas(db); err != nil {
+		return nil, err
+	}
 	_, err = db.Exec(`
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
@@ -108,6 +119,27 @@ CREATE TABLE IF NOT EXISTS chat_jobs (
 		return nil, err
 	}
 	return &Store{DB: db}, nil
+}
+
+func configureSQLite(db *sql.DB) {
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+}
+
+func applySQLitePragmas(db *sql.DB) error {
+	stmts := []string{
+		`PRAGMA journal_mode = WAL`,
+		`PRAGMA busy_timeout = 5000`,
+		`PRAGMA synchronous = NORMAL`,
+		`PRAGMA foreign_keys = ON`,
+	}
+	for _, stmt := range stmts {
+		if _, err := db.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func migrate(db *sql.DB) error {
@@ -328,13 +360,20 @@ func (s *Store) AddMessage(ctx context.Context, user, conversationID string, msg
 	if err := s.DB.QueryRowContext(ctx, `SELECT 1 FROM conversations WHERE user_email = ? AND id = ?`, user, conversationID).Scan(&exists); err != nil {
 		return nil, err
 	}
-	res, err := s.DB.ExecContext(ctx, `
+	var res sql.Result
+	err := retryBusyWrite(ctx, func() error {
+		var execErr error
+		res, execErr = s.DB.ExecContext(ctx, `
 INSERT INTO messages (conversation_id, role, content, thinking, model, created_at)
 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`, conversationID, msg.Role, msg.Content, msg.Thinking, msg.Model)
+		return execErr
+	})
 	if err != nil {
 		return nil, err
 	}
-	_, _ = s.DB.ExecContext(ctx, `UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, conversationID)
+	if err := s.touchConversation(ctx, conversationID); err != nil {
+		return nil, err
+	}
 	id, err := res.LastInsertId()
 	if err != nil {
 		return nil, err
@@ -459,10 +498,13 @@ VALUES (?, ?, ?, 'running', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, id, conve
 	if err != nil {
 		return nil, err
 	}
-	return s.GetChatJob(ctx, user, conversationID, id)
+	return s.GetChatJob(ctx, user, conversationID, id, 0, "")
 }
 
-func (s *Store) GetChatJob(ctx context.Context, user, conversationID, id string) (*ChatJob, error) {
+func (s *Store) GetChatJob(ctx context.Context, user, conversationID, id string, staleAfter time.Duration, staleMessage string) (*ChatJob, error) {
+	if err := s.failStaleChatJob(ctx, user, conversationID, id, staleAfter, staleMessage); err != nil {
+		return nil, err
+	}
 	var j ChatJob
 	err := s.DB.QueryRowContext(ctx, `
 SELECT id, conversation_id, user_email, status, content, thinking, model, error, message_id, created_at, updated_at
@@ -475,7 +517,10 @@ WHERE user_email = ? AND conversation_id = ? AND id = ?`, user, conversationID, 
 	return &j, nil
 }
 
-func (s *Store) ActiveChatJob(ctx context.Context, user, conversationID string) (*ChatJob, error) {
+func (s *Store) ActiveChatJob(ctx context.Context, user, conversationID string, staleAfter time.Duration, staleMessage string) (*ChatJob, error) {
+	if err := s.failStaleConversationChatJobs(ctx, user, conversationID, staleAfter, staleMessage); err != nil {
+		return nil, err
+	}
 	var j ChatJob
 	err := s.DB.QueryRowContext(ctx, `
 SELECT id, conversation_id, user_email, status, content, thinking, model, error, message_id, created_at, updated_at
@@ -491,58 +536,80 @@ LIMIT 1`, user, conversationID).
 }
 
 func (s *Store) UpdateChatJob(ctx context.Context, user, conversationID, id, content, thinking string) error {
-	_, err := s.DB.ExecContext(ctx, `
+	return retryBusyWrite(ctx, func() error {
+		_, err := s.DB.ExecContext(ctx, `
 UPDATE chat_jobs
 SET content = ?, thinking = ?, updated_at = CURRENT_TIMESTAMP
 WHERE user_email = ? AND conversation_id = ? AND id = ? AND status = 'running'`, content, thinking, user, conversationID, id)
-	return err
+		return err
+	})
 }
 
 func (s *Store) CompleteChatJob(ctx context.Context, user, conversationID, id, content, thinking, model string) (*Message, error) {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
+	return retryBusyResult(ctx, func() (*Message, error) {
+		tx, err := s.DB.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		defer tx.Rollback()
 
-	res, err := tx.ExecContext(ctx, `
+		res, err := tx.ExecContext(ctx, `
 INSERT INTO messages (conversation_id, role, content, thinking, model, created_at)
 VALUES (?, 'assistant', ?, ?, ?, CURRENT_TIMESTAMP)`, conversationID, content, thinking, model)
-	if err != nil {
-		return nil, err
-	}
-	messageID, err := res.LastInsertId()
-	if err != nil {
-		return nil, err
-	}
-	if _, err := tx.ExecContext(ctx, `
+		if err != nil {
+			return nil, err
+		}
+		messageID, err := res.LastInsertId()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `
 UPDATE chat_jobs
 SET status = 'complete', content = ?, thinking = ?, model = ?, message_id = ?, updated_at = CURRENT_TIMESTAMP
 WHERE user_email = ? AND conversation_id = ? AND id = ?`, content, thinking, model, messageID, user, conversationID, id); err != nil {
-		return nil, err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE user_email = ? AND id = ?`, user, conversationID); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return s.GetMessage(ctx, user, conversationID, messageID)
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `
+UPDATE conversations
+SET updated_at = CURRENT_TIMESTAMP
+WHERE user_email = ? AND id = ?`, user, conversationID); err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return &Message{
+			ID:             messageID,
+			ConversationID: conversationID,
+			Role:           "assistant",
+			Content:        content,
+			Thinking:       thinking,
+			Model:          model,
+			CreatedAt:      time.Now().UTC().Format(sqliteTimeLayout),
+		}, nil
+	})
 }
 
 func (s *Store) FailChatJob(ctx context.Context, user, conversationID, id, message string) error {
-	_, err := s.DB.ExecContext(ctx, `
+	return retryBusyWrite(ctx, func() error {
+		_, err := s.DB.ExecContext(ctx, `
 UPDATE chat_jobs
 SET status = 'error', error = ?, updated_at = CURRENT_TIMESTAMP
 WHERE user_email = ? AND conversation_id = ? AND id = ? AND status = 'running'`, message, user, conversationID, id)
-	return err
+		return err
+	})
 }
 
 func (s *Store) CancelChatJob(ctx context.Context, user, conversationID, id string) error {
-	res, err := s.DB.ExecContext(ctx, `
+	var res sql.Result
+	err := retryBusyWrite(ctx, func() error {
+		var execErr error
+		res, execErr = s.DB.ExecContext(ctx, `
 UPDATE chat_jobs
 SET status = 'canceled', updated_at = CURRENT_TIMESTAMP
 WHERE user_email = ? AND conversation_id = ? AND id = ? AND status = 'running'`, user, conversationID, id)
+		return execErr
+	})
 	if err != nil {
 		return err
 	}
@@ -554,6 +621,116 @@ WHERE user_email = ? AND conversation_id = ? AND id = ? AND status = 'running'`,
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+func (s *Store) FailStaleChatJobs(ctx context.Context, staleAfter time.Duration, message string) error {
+	if staleAfter <= 0 {
+		return nil
+	}
+	cutoff := staleCutoff(staleAfter)
+	return retryBusyWrite(ctx, func() error {
+		_, err := s.DB.ExecContext(ctx, `
+UPDATE chat_jobs
+SET status = 'error', error = ?, updated_at = CURRENT_TIMESTAMP
+WHERE status = 'running' AND updated_at <= ?`, message, cutoff)
+		return err
+	})
+}
+
+func (s *Store) failStaleConversationChatJobs(ctx context.Context, user, conversationID string, staleAfter time.Duration, message string) error {
+	if staleAfter <= 0 {
+		return nil
+	}
+	cutoff := staleCutoff(staleAfter)
+	return retryBusyWrite(ctx, func() error {
+		_, err := s.DB.ExecContext(ctx, `
+UPDATE chat_jobs
+SET status = 'error', error = ?, updated_at = CURRENT_TIMESTAMP
+WHERE user_email = ? AND conversation_id = ? AND status = 'running' AND updated_at <= ?`, message, user, conversationID, cutoff)
+		return err
+	})
+}
+
+func (s *Store) failStaleChatJob(ctx context.Context, user, conversationID, id string, staleAfter time.Duration, message string) error {
+	if staleAfter <= 0 {
+		return nil
+	}
+	cutoff := staleCutoff(staleAfter)
+	return retryBusyWrite(ctx, func() error {
+		_, err := s.DB.ExecContext(ctx, `
+UPDATE chat_jobs
+SET status = 'error', error = ?, updated_at = CURRENT_TIMESTAMP
+WHERE user_email = ? AND conversation_id = ? AND id = ? AND status = 'running' AND updated_at <= ?`, message, user, conversationID, id, cutoff)
+		return err
+	})
+}
+
+func (s *Store) touchConversation(ctx context.Context, conversationID string) error {
+	return retryBusyWrite(ctx, func() error {
+		_, err := s.DB.ExecContext(ctx, `
+UPDATE conversations
+SET updated_at = CURRENT_TIMESTAMP
+WHERE id = ?`, conversationID)
+		return err
+	})
+}
+
+func staleCutoff(staleAfter time.Duration) string {
+	return time.Now().Add(-staleAfter).UTC().Format(sqliteTimeLayout)
+}
+
+func retryBusyWrite(ctx context.Context, fn func() error) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var err error
+	delay := sqliteRetryBase
+	for attempt := 0; attempt < sqliteRetryMax; attempt++ {
+		err = fn()
+		if !isBusyError(err) {
+			return err
+		}
+		if attempt == sqliteRetryMax-1 {
+			return err
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+		delay *= 2
+	}
+	return err
+}
+
+func retryBusyResult[T any](ctx context.Context, fn func() (T, error)) (T, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var zero T
+	var result T
+	err := retryBusyWrite(ctx, func() error {
+		var innerErr error
+		result, innerErr = fn()
+		if innerErr != nil {
+			result = zero
+		}
+		return innerErr
+	})
+	if err != nil {
+		return zero, err
+	}
+	return result, nil
+}
+
+func isBusyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "database is locked") || strings.Contains(message, "sqlite_busy")
 }
 
 func newID() string {

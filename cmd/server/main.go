@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"net"
@@ -20,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/billnice250/ollama-chat-tone/internal/auth"
 	"github.com/billnice250/ollama-chat-tone/internal/config"
@@ -30,6 +32,16 @@ import (
 
 var version = ""
 
+const (
+	jobProgressFlushInterval  = 500 * time.Millisecond
+	jobProgressFlushThreshold = 256
+)
+
+var (
+	errChatJobCanceled    = errors.New("chat job canceled")
+	errChatJobIdleTimeout = errors.New("chat job idle timeout")
+)
+
 func main() {
 	cfg := config.Load()
 	store, err := db.Open(cfg.DBPath)
@@ -37,6 +49,9 @@ func main() {
 		log.Fatal(err)
 	}
 	defer store.DB.Close()
+	if err := store.FailStaleChatJobs(contextBackground(), cfg.JobIdleTimeout, staleChatJobMessage(cfg.JobIdleTimeout)); err != nil {
+		log.Printf("stale chat job cleanup error err=%v", err)
+	}
 
 	app, err := newAppRuntime(contextBackground(), cfg, store)
 	if err != nil {
@@ -204,7 +219,7 @@ func main() {
 			writeError(w, http.StatusForbidden, "anonymous chats are stored in local browser storage")
 			return
 		}
-		handleConversation(w, r, store, app.Ollama(), jobs, user)
+		handleConversation(w, r, store, app.Ollama(), jobs, user, app.Config().JobIdleTimeout)
 	})))
 	mux.Handle("/api/models", app.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -507,14 +522,14 @@ func isAdmin(r *http.Request) bool {
 
 type jobManager struct {
 	mu      sync.Mutex
-	cancels map[string]context.CancelFunc
+	cancels map[string]context.CancelCauseFunc
 }
 
 func newJobManager() *jobManager {
-	return &jobManager{cancels: map[string]context.CancelFunc{}}
+	return &jobManager{cancels: map[string]context.CancelCauseFunc{}}
 }
 
-func (m *jobManager) add(id string, cancel context.CancelFunc) {
+func (m *jobManager) add(id string, cancel context.CancelCauseFunc) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.cancels[id] = cancel
@@ -531,11 +546,11 @@ func (m *jobManager) cancel(id string) {
 	cancel := m.cancels[id]
 	m.mu.Unlock()
 	if cancel != nil {
-		cancel()
+		cancel(errChatJobCanceled)
 	}
 }
 
-func handleConversation(w http.ResponseWriter, r *http.Request, store *db.Store, oc *ollama.Client, jobs *jobManager, user string) {
+func handleConversation(w http.ResponseWriter, r *http.Request, store *db.Store, oc *ollama.Client, jobs *jobManager, user string, jobIdleTimeout time.Duration) {
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/conversations/"), "/")
 	parts := strings.Split(path, "/")
 	if len(parts) == 0 || parts[0] == "" {
@@ -584,7 +599,7 @@ func handleConversation(w http.ResponseWriter, r *http.Request, store *db.Store,
 	}
 
 	if len(parts) >= 2 && parts[1] == "jobs" {
-		handleChatJob(w, r, store, oc, jobs, user, conversationID, parts[2:])
+		handleChatJob(w, r, store, oc, jobs, user, conversationID, parts[2:], jobIdleTimeout)
 		return
 	}
 
@@ -620,7 +635,8 @@ func handleConversation(w http.ResponseWriter, r *http.Request, store *db.Store,
 	writeError(w, http.StatusNotFound, "conversation not found")
 }
 
-func handleChatJob(w http.ResponseWriter, r *http.Request, store *db.Store, oc *ollama.Client, jobs *jobManager, user, conversationID string, parts []string) {
+func handleChatJob(w http.ResponseWriter, r *http.Request, store *db.Store, oc *ollama.Client, jobs *jobManager, user, conversationID string, parts []string, jobIdleTimeout time.Duration) {
+	staleMessage := staleChatJobMessage(jobIdleTimeout)
 	if len(parts) == 0 {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -638,7 +654,7 @@ func handleChatJob(w http.ResponseWriter, r *http.Request, store *db.Store, oc *
 		if req.Model == "" {
 			req.Model = "unknown"
 		}
-		if _, err := store.ActiveChatJob(r.Context(), user, conversationID); err == nil {
+		if _, err := store.ActiveChatJob(r.Context(), user, conversationID, jobIdleTimeout, staleMessage); err == nil {
 			writeError(w, http.StatusConflict, "conversation already has a running response")
 			return
 		} else if !errors.Is(err, sql.ErrNoRows) {
@@ -650,9 +666,9 @@ func handleChatJob(w http.ResponseWriter, r *http.Request, store *db.Store, oc *
 			writeDBError(w, err, "conversation not found")
 			return
 		}
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancelCause(context.Background())
 		jobs.add(job.ID, cancel)
-		go runChatJob(ctx, store, oc, jobs, user, conversationID, job.ID, req.Model, req.Messages, req.Think)
+		go runChatJob(ctx, cancel, store, oc, jobs, user, conversationID, job.ID, req.Model, req.Messages, req.Think, jobIdleTimeout)
 		auth.WriteJSON(w, map[string]any{"job": job})
 		return
 	}
@@ -662,7 +678,7 @@ func handleChatJob(w http.ResponseWriter, r *http.Request, store *db.Store, oc *
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		job, err := store.ActiveChatJob(r.Context(), user, conversationID)
+		job, err := store.ActiveChatJob(r.Context(), user, conversationID, jobIdleTimeout, staleMessage)
 		if errors.Is(err, sql.ErrNoRows) {
 			auth.WriteJSON(w, map[string]any{"job": nil})
 			return
@@ -678,7 +694,7 @@ func handleChatJob(w http.ResponseWriter, r *http.Request, store *db.Store, oc *
 	if len(parts) >= 1 {
 		jobID := parts[0]
 		if len(parts) == 1 && r.Method == http.MethodGet {
-			job, err := store.GetChatJob(r.Context(), user, conversationID, jobID)
+			job, err := store.GetChatJob(r.Context(), user, conversationID, jobID, jobIdleTimeout, staleMessage)
 			if err != nil {
 				writeDBError(w, err, "job not found")
 				return
@@ -700,24 +716,95 @@ func handleChatJob(w http.ResponseWriter, r *http.Request, store *db.Store, oc *
 	writeError(w, http.StatusNotFound, "job not found")
 }
 
-func runChatJob(ctx context.Context, store *db.Store, oc *ollama.Client, jobs *jobManager, user, conversationID, jobID, model string, messages []ollama.Message, think bool) {
+func runChatJob(ctx context.Context, cancel context.CancelCauseFunc, store *db.Store, oc *ollama.Client, jobs *jobManager, user, conversationID, jobID, model string, messages []ollama.Message, think bool, jobIdleTimeout time.Duration) {
 	defer jobs.remove(jobID)
 	content := ""
 	thinking := ""
+	lastFlushAt := time.Time{}
+	flushedContentLen := 0
+	flushedThinkingLen := 0
+	lastChunkAt := time.Now()
+	var stateMu sync.Mutex
+
+	flushProgress := func(force bool) error {
+		stateMu.Lock()
+		currentContent := content
+		currentThinking := thinking
+		contentDelta := len(currentContent) - flushedContentLen
+		thinkingDelta := len(currentThinking) - flushedThinkingLen
+		shouldFlush := force ||
+			lastFlushAt.IsZero() ||
+			time.Since(lastFlushAt) >= jobProgressFlushInterval ||
+			contentDelta >= jobProgressFlushThreshold ||
+			thinkingDelta >= jobProgressFlushThreshold
+		stateMu.Unlock()
+		if !shouldFlush {
+			return nil
+		}
+		if err := store.UpdateChatJob(contextBackground(), user, conversationID, jobID, currentContent, currentThinking); err != nil {
+			return err
+		}
+		stateMu.Lock()
+		flushedContentLen = len(currentContent)
+		flushedThinkingLen = len(currentThinking)
+		lastFlushAt = time.Now()
+		stateMu.Unlock()
+		return nil
+	}
+
+	if jobIdleTimeout > 0 {
+		go func() {
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					stateMu.Lock()
+					idleFor := time.Since(lastChunkAt)
+					stateMu.Unlock()
+					if idleFor >= jobIdleTimeout {
+						cancel(errChatJobIdleTimeout)
+						return
+					}
+				}
+			}
+		}()
+	}
+
 	req := ollama.ChatRequest{Model: model, Messages: messages, Stream: true, Think: &think}
 	err := oc.StreamChat(ctx, req, func(chunk ollama.ChatResponse) error {
+		stateMu.Lock()
 		content += chunk.Message.Content
 		if think {
 			thinking += chunk.Message.Thinking
 		}
-		return store.UpdateChatJob(context.Background(), user, conversationID, jobID, content, thinking)
+		lastChunkAt = time.Now()
+		stateMu.Unlock()
+		if err := flushProgress(false); err != nil {
+			log.Printf("runChatJob: progress update job=%s err=%v", jobID, err)
+		}
+		return nil
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			if flushErr := flushProgress(true); flushErr != nil {
+				log.Printf("runChatJob: final progress flush job=%s err=%v", jobID, flushErr)
+			}
+			if errors.Is(context.Cause(ctx), errChatJobIdleTimeout) {
+				if failErr := store.FailChatJob(contextBackground(), user, conversationID, jobID, staleChatJobMessage(jobIdleTimeout)); failErr != nil {
+					log.Printf("runChatJob: timeout job=%s err=%v", jobID, failErr)
+				}
+				return
+			}
 			if cancelErr := store.CancelChatJob(context.Background(), user, conversationID, jobID); cancelErr != nil {
 				log.Printf("runChatJob: cancel job=%s err=%v", jobID, cancelErr)
 			}
 			return
+		}
+		if flushErr := flushProgress(true); flushErr != nil {
+			log.Printf("runChatJob: final progress flush job=%s err=%v", jobID, flushErr)
 		}
 		if failErr := store.FailChatJob(context.Background(), user, conversationID, jobID, err.Error()); failErr != nil {
 			log.Printf("runChatJob: fail job=%s err=%v", jobID, failErr)
@@ -729,6 +816,13 @@ func runChatJob(ctx context.Context, store *db.Store, oc *ollama.Client, jobs *j
 			log.Printf("runChatJob: fail job=%s after complete err=%v", jobID, failErr)
 		}
 	}
+}
+
+func staleChatJobMessage(jobIdleTimeout time.Duration) string {
+	if jobIdleTimeout <= 0 {
+		return "generation timed out waiting for model output"
+	}
+	return fmt.Sprintf("generation timed out after %s without model output", jobIdleTimeout.Round(time.Second))
 }
 
 func writeDBError(w http.ResponseWriter, err error, notFound string) {

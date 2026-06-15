@@ -20,6 +20,7 @@ type Config struct {
 	DBPath        string
 	OllamaURL     string
 	OllamaTimeout time.Duration
+	JobIdleTimeout time.Duration
 	DefaultModel  string
 	OpenBrowser   bool
 
@@ -62,6 +63,7 @@ func Load() Config {
 		DBPath:           getenv(fileEnv, "DB_PATH", "./app.db"),
 		OllamaURL:        getenv(fileEnv, "OLLAMA_URL", "http://ollama:11434"),
 		OllamaTimeout:    durationMinutes(fileEnv, "OLLAMA_TIMEOUT", 5),
+		JobIdleTimeout:   durationValue(fileEnv, "JOB_IDLE_TIMEOUT", 45*time.Second),
 		DefaultModel:     getenv(fileEnv, "DEFAULT_MODEL", "llama3.2"),
 		OpenBrowser:      boolEnv(fileEnv, "OPEN_BROWSER", false),
 		BasicUser:        getenv(fileEnv, "BASIC_AUTH_USER", ""),
@@ -153,6 +155,18 @@ func durationMinutes(fileEnv map[string]string, k string, def int) time.Duration
 	d, err := time.ParseDuration(v)
 	if err != nil {
 		return time.Duration(def) * time.Minute
+	}
+	return d
+}
+
+func durationValue(fileEnv map[string]string, k string, def time.Duration) time.Duration {
+	v := strings.TrimSpace(getenv(fileEnv, k, ""))
+	if v == "" {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return def
 	}
 	return d
 }
