@@ -3,6 +3,7 @@ const localStorageKey = 'ollama-chat-tone.chats.v1';
 const el = {
 	appName: document.getElementById('app-name'),
 	appStatus: document.getElementById('app-status'),
+	appVersion: document.getElementById('app-version'),
 	currentUser: document.getElementById('current-user'),
 	sidebar: document.querySelector('.sidebar'),
 	sidebarToggle: document.getElementById('sidebar-toggle'),
@@ -837,6 +838,7 @@ function consumeStreamLine(line, onChunk) {
 async function loadConfig() {
 	const cfg = await fetchJSON('/api/config');
 	state.appName = cfg.appName || state.appName;
+	state.version = cfg.version || state.version || 'dev';
 	state.defaultModel = cfg.defaultModel || state.defaultModel;
 	state.authMode = cfg.authMode || state.authMode;
 	state.storageMode = cfg.storageMode || (state.authMode === 'none' ? 'local' : 'server');
@@ -844,6 +846,7 @@ async function loadConfig() {
 	state.isAdmin = Boolean(cfg.isAdmin);
 	document.title = state.appName;
 	el.appName.textContent = state.appName;
+	el.appVersion.textContent = `Version ${state.version}`;
 	el.currentUser.textContent = state.currentUser;
 	el.adminLink.classList.toggle('hidden', !state.isAdmin);
 	el.reloadConfig.classList.toggle('hidden', state.currentUser !== 'anonymous' && !state.isAdmin);

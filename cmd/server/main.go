@@ -27,6 +27,8 @@ import (
 	"github.com/billnice250/ollama-chat-tone/internal/static"
 )
 
+var version = "dev"
+
 func main() {
 	cfg := config.Load()
 	store, err := db.Open(cfg.DBPath)
@@ -79,6 +81,7 @@ func main() {
 		cfg := app.Config()
 		auth.WriteJSON(w, map[string]any{
 			"appName":      cfg.AppName,
+			"version":      version,
 			"defaultModel": cfg.DefaultModel,
 			"authMode":     cfg.AuthMode(),
 			"storageMode":  storageMode(cfg.AuthMode()),
@@ -105,6 +108,7 @@ func main() {
 		auth.WriteJSON(w, map[string]any{
 			"reloaded":     true,
 			"appName":      cfg.AppName,
+			"version":      version,
 			"defaultModel": cfg.DefaultModel,
 			"authMode":     cfg.AuthMode(),
 			"storageMode":  storageMode(cfg.AuthMode()),

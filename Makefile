@@ -5,7 +5,7 @@ CMD ?= ./cmd/server
 DIST_DIR ?= dist
 BIN_DIR ?= bin
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS ?= -s -w
+LDFLAGS ?= -s -w -X main.version=$(VERSION)
 GO_CACHE_DIR ?= $(CURDIR)/.gocache
 ICON_ICNS ?= assets/logo.icns
 ICON_ICO ?= assets/logo.ico

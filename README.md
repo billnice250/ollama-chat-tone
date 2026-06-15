@@ -144,6 +144,12 @@ docker build -t ollama-chat-tone:local .
 docker run --rm -p 8080:8080 --env-file .env -e DB_PATH=/data/app.db -v ollama-chat-tone-data:/data ollama-chat-tone:local
 ```
 
+Set the version shown in the app with a build arg:
+
+```bash
+docker build --build-arg VERSION=v1.0.0 -t ollama-chat-tone:local .
+```
+
 If Ollama is running on the host machine from Docker Desktop, set:
 
 ```env
