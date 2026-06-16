@@ -97,9 +97,10 @@ func (m *Manager) RequireAuth(next http.Handler) http.Handler {
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
-				clearCookie(w, sessionCookie)
-			} else if readCookie(r, sessionCookie) != "" {
-				// Cookie exists but HMAC verification failed (stale or tampered); clear it.
+			}
+			// Clear any stale or invalid session cookie (failed HMAC, missing user,
+			// or account not yet approved/verified) so it doesn't keep redirecting.
+			if readCookie(r, sessionCookie) != "" {
 				clearCookie(w, sessionCookie)
 			}
 		}
