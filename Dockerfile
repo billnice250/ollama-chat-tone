@@ -34,7 +34,7 @@ RUN set -eu; \
       )"; \
     fi; \
     if [ -z "$resolved_version" ] && [ -n "$head_sha" ] && [ -f .git/packed-refs ]; then \
-      resolved_version="$(awk -v sha="$head_sha" '$1==sha && $2 ~ /^refs\\/tags\\// { sub(/^refs\\/tags\\//, "", $2); print $2; exit }' .git/packed-refs || true)"; \
+      resolved_version="$(awk -v sha="$head_sha" '$1==sha && $2 ~ /^refs\/tags\// { sub(/^refs\/tags\//, "", $2); print $2; exit }' .git/packed-refs || true)"; \
     fi; \
     if [ -z "$resolved_version" ]; then \
       resolved_version="$(printf '%s' "$head_sha" | cut -c1-6)"; \

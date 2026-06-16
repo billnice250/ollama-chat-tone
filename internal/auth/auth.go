@@ -10,10 +10,13 @@ import (
 	"encoding/json"
 	"html/template"
 	"net/http"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/billnice250/ollama-chat-tone/internal/config"
 	"github.com/billnice250/ollama-chat-tone/internal/db"
+	"github.com/billnice250/ollama-chat-tone/internal/mailer"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/oauth2"
@@ -29,9 +32,12 @@ const AdminKey ctxKey = "admin"
 
 const sessionCookie = "session"
 
+var emailRE = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
+
 type Manager struct {
 	cfg          config.Config
 	store        *db.Store
+	mailer       *mailer.Mailer
 	provider     *oidc.Provider
 	verifier     *oidc.IDTokenVerifier
 	oauth2Config *oauth2.Config
@@ -43,7 +49,8 @@ func New(ctx context.Context, cfg config.Config, store *db.Store) (*Manager, err
 	if err != nil {
 		return nil, err
 	}
-	m := &Manager{cfg: cfg, store: store, templates: tmpl}
+	ml := mailer.New(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.SMTPFrom)
+	m := &Manager{cfg: cfg, store: store, mailer: ml, templates: tmpl}
 	if localAvailable(cfg) {
 		hash, err := bcrypt.GenerateFromPassword([]byte(cfg.BasicPass), bcrypt.DefaultCost)
 		if err != nil {
@@ -82,7 +89,7 @@ func (m *Manager) RequireAuth(next http.Handler) http.Handler {
 			username, ok := m.readSession(r)
 			if ok {
 				user, err := m.store.GetUser(r.Context(), username)
-				if err == nil && user.Approved {
+				if err == nil && user.Approved && user.EmailVerified {
 					_ = m.store.TouchUser(r.Context(), user.Username)
 					ctx := context.WithValue(r.Context(), EmailKey, user.Username)
 					ctx = context.WithValue(ctx, AdminKey, user.IsAdmin)
@@ -161,7 +168,11 @@ func (m *Manager) Signup(w http.ResponseWriter, r *http.Request) {
 	username := strings.ToLower(strings.TrimSpace(r.FormValue("username")))
 	password := r.FormValue("password")
 	if username == "" || password == "" {
-		m.writeLocalAuthPage(w, "Register", "username and password are required", true)
+		m.writeLocalAuthPage(w, "Register", "email and password are required", true)
+		return
+	}
+	if !emailRE.MatchString(username) {
+		m.writeLocalAuthPage(w, "Register", "a valid email address is required", true)
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -173,7 +184,136 @@ func (m *Manager) Signup(w http.ResponseWriter, r *http.Request) {
 		m.writeLocalAuthPage(w, "Register", "user already exists or cannot be created", true)
 		return
 	}
+
+	// Send email verification link if mailer is available.
+	if m.mailer.Available() {
+		tok, err := m.store.CreateToken(r.Context(), username, "verify", 24*time.Hour)
+		if err == nil {
+			link := m.absURL("/auth/verify?token=" + tok)
+			_ = m.mailer.Send(username, "Verify your email – "+m.cfg.AppName,
+				"Click the link below to verify your email address:\n\n"+link+"\n\nThis link expires in 24 hours.")
+		}
+		m.writeLocalAuthPage(w, "Register", "check your email for a verification link", true)
+		return
+	}
+
+	// No mailer: auto-verify and let admin approve.
+	_ = m.store.VerifyEmail(r.Context(), username)
 	m.writeLocalAuthPage(w, "Register", "request submitted; wait for an admin to approve access", true)
+}
+
+// Verify handles the email verification link.
+func (m *Manager) Verify(w http.ResponseWriter, r *http.Request) {
+	tok := r.URL.Query().Get("token")
+	if tok == "" {
+		m.writeSimplePage(w, "Verify email", "Missing verification token.")
+		return
+	}
+	username, err := m.store.ConsumeToken(r.Context(), tok, "verify")
+	if err != nil {
+		m.writeSimplePage(w, "Verify email", "The verification link is invalid or has expired.")
+		return
+	}
+	_ = m.store.VerifyEmail(r.Context(), username)
+	m.writeSimplePage(w, "Email verified", "Your email has been verified. An admin will approve your access shortly.")
+}
+
+// ForgotPassword shows / handles the forgot-password form.
+func (m *Manager) ForgotPassword(w http.ResponseWriter, r *http.Request) {
+	if !localAvailable(m.cfg) {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method == http.MethodGet {
+		m.writeAuthPage(w, authPageData{
+			AppName: m.cfg.AppName,
+			Title:   "Forgot password",
+			Action:  "/auth/forgot-password",
+			AltHref: "/auth/login",
+			AltText: "Back to login",
+			ShowForgotForm: true,
+		})
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	email := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
+	// Always show the same message to prevent user enumeration.
+	msg := "If an account with that email exists, a reset link has been sent."
+	if email != "" && m.mailer.Available() {
+		if _, err := m.store.GetUser(r.Context(), email); err == nil {
+			tok, err := m.store.CreateToken(r.Context(), email, "reset", time.Hour)
+			if err == nil {
+				link := m.absURL("/auth/reset-password?token=" + tok)
+				_ = m.mailer.Send(email, "Reset your password – "+m.cfg.AppName,
+					"Click the link below to reset your password:\n\n"+link+"\n\nThis link expires in 1 hour.")
+			}
+		}
+	}
+	m.writeAuthPage(w, authPageData{
+		AppName: m.cfg.AppName,
+		Title:   "Forgot password",
+		Message: msg,
+		AltHref: "/auth/login",
+		AltText: "Back to login",
+	})
+}
+
+// ResetPassword handles the password-reset form.
+func (m *Manager) ResetPassword(w http.ResponseWriter, r *http.Request) {
+	if !localAvailable(m.cfg) {
+		http.NotFound(w, r)
+		return
+	}
+	tok := r.URL.Query().Get("token")
+	if r.Method == http.MethodGet {
+		if tok == "" {
+			http.Redirect(w, r, "/auth/forgot-password", http.StatusFound)
+			return
+		}
+		m.writeAuthPage(w, authPageData{
+			AppName:        m.cfg.AppName,
+			Title:          "Reset password",
+			Action:         "/auth/reset-password?token=" + tok,
+			ShowResetForm:  true,
+		})
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if tok == "" {
+		tok = r.FormValue("token")
+	}
+	password := r.FormValue("password")
+	if password == "" {
+		m.writeAuthPage(w, authPageData{
+			AppName:       m.cfg.AppName,
+			Title:         "Reset password",
+			Message:       "Password is required.",
+			Action:        "/auth/reset-password?token=" + tok,
+			ShowResetForm: true,
+		})
+		return
+	}
+	username, err := m.store.ConsumeToken(r.Context(), tok, "reset")
+	if err != nil {
+		m.writeSimplePage(w, "Reset password", "The reset link is invalid or has expired. Please request a new one.")
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := m.store.SetPassword(r.Context(), username, string(hash)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	m.writeSimplePage(w, "Password reset", "Your password has been reset. You can now log in.")
 }
 
 func (m *Manager) Callback(w http.ResponseWriter, r *http.Request) {
@@ -258,7 +398,11 @@ func (m *Manager) localLogin(w http.ResponseWriter, r *http.Request) {
 	password := r.FormValue("password")
 	user, err := m.store.GetUser(r.Context(), username)
 	if err != nil || bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)) != nil {
-		m.writeLocalAuthPage(w, "Log in", "invalid username or password", false)
+		m.writeLocalAuthPage(w, "Log in", "invalid email or password", false)
+		return
+	}
+	if !user.EmailVerified {
+		m.writeLocalAuthPage(w, "Log in", "please verify your email address before logging in", false)
 		return
 	}
 	if !user.Approved {
@@ -321,6 +465,14 @@ func (m *Manager) readSession(r *http.Request) (string, bool) {
 	return username, hmac.Equal([]byte(m.signSession(username)), []byte(username+"."+sig))
 }
 
+func (m *Manager) absURL(path string) string {
+	base := strings.TrimRight(m.cfg.BaseURL, "/")
+	if base == "" {
+		base = "http://localhost" + m.cfg.Addr
+	}
+	return base + path
+}
+
 type authPageData struct {
 	AppName              string
 	Title                string
@@ -333,10 +485,19 @@ type authPageData struct {
 	ShowOAuth            bool
 	OAuthHref            string
 	OAuthLabel           string
+	ShowForgotLink       bool
+	ShowForgotForm       bool
+	ShowResetForm        bool
 }
 
 type logoutPageData struct {
 	AppName string
+}
+
+type simplePageData struct {
+	AppName string
+	Title   string
+	Message string
 }
 
 func (m *Manager) writeLocalAuthPage(w http.ResponseWriter, title, message string, signup bool) {
@@ -362,6 +523,7 @@ func (m *Manager) writeLocalAuthPage(w http.ResponseWriter, title, message strin
 		ShowOAuth:            m.oauth2Config != nil,
 		OAuthHref:            "/auth/login?provider=oidc",
 		OAuthLabel:           "Continue with OAuth",
+		ShowForgotLink:       !signup && m.mailer.Available(),
 	})
 }
 
@@ -379,3 +541,11 @@ func (m *Manager) writeLogoutPage(w http.ResponseWriter) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
+
+func (m *Manager) writeSimplePage(w http.ResponseWriter, title, message string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := m.templates.ExecuteTemplate(w, "simple.html", simplePageData{AppName: m.cfg.AppName, Title: title, Message: message}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+

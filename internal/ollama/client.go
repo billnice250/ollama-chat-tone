@@ -3,6 +3,7 @@ package ollama
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -41,10 +42,24 @@ type Client struct {
 }
 
 func New(base string, timeout time.Duration) *Client {
+	return NewWithTLS(base, timeout, nil)
+}
+
+// NewWithTLS creates a Client that uses the given TLS configuration (e.g. for
+// mutual-TLS). Pass nil to use the default transport.
+func NewWithTLS(base string, timeout time.Duration, tlsCfg *tls.Config) *Client {
+	transport := http.DefaultTransport
+	if tlsCfg != nil {
+		transport = &http.Transport{TLSClientConfig: tlsCfg}
+	}
+	streamTransport := transport
+	if tlsCfg != nil {
+		streamTransport = &http.Transport{TLSClientConfig: tlsCfg}
+	}
 	return &Client{
 		BaseURL:    base,
-		HTTP:       &http.Client{Timeout: timeout},
-		streamHTTP: &http.Client{}, // no client-level timeout for streaming; duration is controlled by context
+		HTTP:       &http.Client{Timeout: timeout, Transport: transport},
+		streamHTTP: &http.Client{Transport: streamTransport},
 	}
 }
 

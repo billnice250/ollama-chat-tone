@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,15 +20,18 @@ import (
 	"path"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/billnice250/ollama-chat-tone/internal/auth"
 	"github.com/billnice250/ollama-chat-tone/internal/config"
 	"github.com/billnice250/ollama-chat-tone/internal/db"
 	"github.com/billnice250/ollama-chat-tone/internal/ollama"
 	"github.com/billnice250/ollama-chat-tone/internal/static"
+	"golang.org/x/crypto/pkcs12"
 )
 
 var version = ""
@@ -51,6 +57,9 @@ func main() {
 	mux.HandleFunc("/auth/signup", app.Signup)
 	mux.HandleFunc("/auth/callback", app.Callback)
 	mux.HandleFunc("/auth/logout", app.Logout)
+	mux.HandleFunc("/auth/verify", app.Verify)
+	mux.HandleFunc("/auth/forgot-password", app.ForgotPassword)
+	mux.HandleFunc("/auth/reset-password", app.ResetPassword)
 	mux.HandleFunc("/styles.css", servePublicStatic("styles.css"))
 	mux.HandleFunc("/logo.svg", servePublicStatic("logo.svg"))
 	mux.Handle("/", app.RequireAuth(staticFileServer(staticFiles())))
@@ -139,29 +148,184 @@ func main() {
 		}
 		path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/users/"), "/")
 		username, action, ok := strings.Cut(path, "/")
-		if !ok || username == "" || (action != "approve" && action != "revoke") {
-			writeError(w, http.StatusNotFound, "user not found")
+		if !ok || username == "" {
+			writeError(w, http.StatusNotFound, "not found")
 			return
 		}
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		var err error
-		if action == "approve" {
-			err = store.ApproveUser(r.Context(), username)
-		} else {
-			if username == userFromRequest(r) {
-				writeError(w, http.StatusBadRequest, "cannot revoke your own account")
+		switch action {
+		case "approve", "revoke":
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 				return
 			}
-			err = store.RevokeUser(r.Context(), username)
+			var err error
+			if action == "approve" {
+				err = store.ApproveUser(r.Context(), username)
+			} else {
+				if username == userFromRequest(r) {
+					writeError(w, http.StatusBadRequest, "cannot revoke your own account")
+					return
+				}
+				err = store.RevokeUser(r.Context(), username)
+			}
+			if err != nil {
+				writeDBError(w, err, "user not found")
+				return
+			}
+			auth.WriteJSON(w, map[string]any{"approved": action == "approve"})
+		case "delete-data":
+			// Delete all conversations/messages of a user but keep the account.
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			if err := store.ClearUserData(r.Context(), username); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			auth.WriteJSON(w, map[string]any{"cleared": true})
+		case "delete":
+			// Permanently delete a user account and all their data.
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			if username == userFromRequest(r) {
+				writeError(w, http.StatusBadRequest, "cannot delete your own account")
+				return
+			}
+			if err := store.DeleteAccount(r.Context(), username); err != nil {
+				writeDBError(w, err, "user not found")
+				return
+			}
+			auth.WriteJSON(w, map[string]any{"deleted": true})
+		default:
+			writeError(w, http.StatusNotFound, "not found")
 		}
-		if err != nil {
-			writeDBError(w, err, "user not found")
+	})))
+	mux.Handle("/api/admin/settings", app.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isAdmin(r) {
+			writeError(w, http.StatusForbidden, "admin access required")
 			return
 		}
-		auth.WriteJSON(w, map[string]any{"approved": action == "approve"})
+		switch r.Method {
+		case http.MethodGet:
+			settings, err := store.ListSettings(r.Context())
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			cfg := app.Config()
+			// Merge env-based defaults with DB overrides for display.
+			effective := map[string]any{
+				"ollamaURL":     firstNonEmpty(settings["ollama_url"], cfg.OllamaURL),
+				"ollamaTimeout": firstNonEmpty(settings["ollama_timeout"], cfg.OllamaTimeout.String()),
+				"defaultModel":  firstNonEmpty(settings["ollama_default_model"], cfg.DefaultModel),
+				"mtlsEnabled":   settings["ollama_tls_pfx"] != "",
+			}
+			auth.WriteJSON(w, map[string]any{"settings": effective})
+		case http.MethodPost:
+			var req struct {
+				OllamaURL     string `json:"ollamaURL"`
+				OllamaTimeout string `json:"ollamaTimeout"`
+				DefaultModel  string `json:"defaultModel"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeError(w, http.StatusBadRequest, "bad request")
+				return
+			}
+			if req.OllamaURL != "" {
+				if err := store.SetSetting(r.Context(), "ollama_url", req.OllamaURL); err != nil {
+					writeError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+			}
+			if req.OllamaTimeout != "" {
+				if _, err := time.ParseDuration(req.OllamaTimeout); err != nil {
+					if _, err2 := strconv.Atoi(req.OllamaTimeout); err2 != nil {
+						writeError(w, http.StatusBadRequest, "ollamaTimeout must be a duration (e.g. 5m) or minutes integer")
+						return
+					}
+				}
+				if err := store.SetSetting(r.Context(), "ollama_timeout", req.OllamaTimeout); err != nil {
+					writeError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+			}
+			if req.DefaultModel != "" {
+				if err := store.SetSetting(r.Context(), "ollama_default_model", req.DefaultModel); err != nil {
+					writeError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+			}
+			// Apply settings immediately.
+			cfg, warnings, err := app.Reload(r.Context())
+			if err != nil {
+				log.Printf("settings apply error remote=%s err=%v", r.RemoteAddr, err)
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			log.Printf("settings updated remote=%s app=%q ollama=%s timeout=%s warnings=%s", r.RemoteAddr, cfg.AppName, cfg.OllamaURL, cfg.OllamaTimeout, strings.Join(warnings, "; "))
+			auth.WriteJSON(w, map[string]any{"applied": true, "warnings": warnings})
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	})))
+	mux.Handle("/api/admin/settings/ollama-cert", app.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isAdmin(r) {
+			writeError(w, http.StatusForbidden, "admin access required")
+			return
+		}
+		switch r.Method {
+		case http.MethodPost:
+			if err := r.ParseMultipartForm(4 << 20); err != nil {
+				writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
+				return
+			}
+			file, _, err := r.FormFile("cert")
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "cert file required")
+				return
+			}
+			defer file.Close()
+			pfxBytes := make([]byte, 4<<20)
+			n, _ := file.Read(pfxBytes)
+			pfxBytes = pfxBytes[:n]
+			passphrase := r.FormValue("passphrase")
+			// Validate the PFX before storing.
+			if _, _, err := parsePFX(pfxBytes, passphrase); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid PFX certificate: "+err.Error())
+				return
+			}
+			encoded := base64.StdEncoding.EncodeToString(pfxBytes)
+			if err := store.SetSetting(r.Context(), "ollama_tls_pfx", encoded); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if err := store.SetSetting(r.Context(), "ollama_tls_pfx_pass", passphrase); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			cfg, warnings, err := app.Reload(r.Context())
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			log.Printf("mTLS cert updated remote=%s app=%q warnings=%s", r.RemoteAddr, cfg.AppName, strings.Join(warnings, "; "))
+			auth.WriteJSON(w, map[string]any{"applied": true, "warnings": warnings})
+		case http.MethodDelete:
+			_ = store.DeleteSetting(r.Context(), "ollama_tls_pfx")
+			_ = store.DeleteSetting(r.Context(), "ollama_tls_pfx_pass")
+			cfg, warnings, err := app.Reload(r.Context())
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			log.Printf("mTLS cert removed remote=%s app=%q warnings=%s", r.RemoteAddr, cfg.AppName, strings.Join(warnings, "; "))
+			auth.WriteJSON(w, map[string]any{"removed": true, "warnings": warnings})
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
 	})))
 	mux.Handle("/api/conversations", app.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := userFromRequest(r)
@@ -267,7 +431,7 @@ func main() {
 	}
 	actualAddr := listener.Addr().String()
 	url := appURL(actualAddr)
-	log.Printf("%s running at %s", cfg.AppName, url)
+	log.Printf("%s version=%s running at %s", cfg.AppName, appVersion(), url)
 	log.Printf("listening on %s configured=%s auth=%s ollama=%s timeout=%s", actualAddr, cfg.Addr, cfg.AuthMode(), cfg.OllamaURL, cfg.OllamaTimeout)
 	if cfg.OpenBrowser {
 		go func() {
@@ -334,14 +498,18 @@ type appRuntime struct {
 }
 
 func newAppRuntime(ctx context.Context, cfg config.Config, store *db.Store) (*appRuntime, error) {
+	// Apply DB setting overrides on top of env-var config.
+	applyDBSettings(ctx, store, &cfg)
+
 	authm, err := auth.New(ctx, cfg, store)
 	if err != nil {
 		return nil, err
 	}
+	tlsCfg, _ := buildTLSConfig(ctx, store)
 	return &appRuntime{
 		cfg:   cfg,
 		authm: authm,
-		oc:    ollama.New(cfg.OllamaURL, cfg.OllamaTimeout),
+		oc:    ollama.NewWithTLS(cfg.OllamaURL, cfg.OllamaTimeout, tlsCfg),
 		store: store,
 	}, nil
 }
@@ -381,11 +549,19 @@ func (a *appRuntime) Reload(ctx context.Context) (config.Config, []string, error
 		next.DBPath = current.DBPath
 	}
 
+	// Apply DB setting overrides on top of env-var config.
+	applyDBSettings(ctx, a.store, &next)
+
 	authm, err := auth.New(ctx, next, a.store)
 	if err != nil {
 		return current, warnings, err
 	}
-	oc := ollama.New(next.OllamaURL, next.OllamaTimeout)
+
+	tlsCfg, tlsWarn := buildTLSConfig(ctx, a.store)
+	if tlsWarn != "" {
+		warnings = append(warnings, tlsWarn)
+	}
+	oc := ollama.NewWithTLS(next.OllamaURL, next.OllamaTimeout, tlsCfg)
 
 	a.mu.Lock()
 	a.cfg = next
@@ -416,6 +592,18 @@ func (a *appRuntime) Callback(w http.ResponseWriter, r *http.Request) {
 
 func (a *appRuntime) Logout(w http.ResponseWriter, r *http.Request) {
 	a.Auth().Logout(w, r)
+}
+
+func (a *appRuntime) Verify(w http.ResponseWriter, r *http.Request) {
+	a.Auth().Verify(w, r)
+}
+
+func (a *appRuntime) ForgotPassword(w http.ResponseWriter, r *http.Request) {
+	a.Auth().ForgotPassword(w, r)
+}
+
+func (a *appRuntime) ResetPassword(w http.ResponseWriter, r *http.Request) {
+	a.Auth().ResetPassword(w, r)
 }
 
 func servePublicStatic(name string) http.HandlerFunc {
@@ -855,4 +1043,75 @@ func staticFiles() fs.FS {
 		log.Fatal(err)
 	}
 	return sub
+}
+
+// applyDBSettings overlays admin-managed settings stored in DB onto cfg.
+func applyDBSettings(ctx context.Context, store *db.Store, cfg *config.Config) {
+	if v := store.GetSetting(ctx, "ollama_url", ""); v != "" {
+		cfg.OllamaURL = v
+	}
+	if v := store.GetSetting(ctx, "ollama_timeout", ""); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.OllamaTimeout = d
+		} else if mins, err := strconv.Atoi(v); err == nil {
+			cfg.OllamaTimeout = time.Duration(mins) * time.Minute
+		}
+	}
+	if v := store.GetSetting(ctx, "ollama_default_model", ""); v != "" {
+		cfg.DefaultModel = v
+	}
+}
+
+// buildTLSConfig loads a mTLS config from DB settings, if a PFX cert is stored.
+func buildTLSConfig(ctx context.Context, store *db.Store) (*tls.Config, string) {
+	pfxB64 := store.GetSetting(ctx, "ollama_tls_pfx", "")
+	if pfxB64 == "" {
+		return nil, ""
+	}
+	pfxBytes, err := base64.StdEncoding.DecodeString(pfxB64)
+	if err != nil {
+		return nil, "mTLS: could not decode stored PFX: " + err.Error()
+	}
+	passphrase := store.GetSetting(ctx, "ollama_tls_pfx_pass", "")
+	tlsCfg, warn := buildTLSFromPFX(pfxBytes, passphrase)
+	return tlsCfg, warn
+}
+
+func buildTLSFromPFX(pfxBytes []byte, passphrase string) (*tls.Config, string) {
+	cert, warn := parseTLSCert(pfxBytes, passphrase)
+	if warn != "" {
+		return nil, warn
+	}
+	return &tls.Config{Certificates: []tls.Certificate{cert}}, ""
+}
+
+func parseTLSCert(pfxBytes []byte, passphrase string) (tls.Certificate, string) {
+	privKey, leaf, err := parsePFX(pfxBytes, passphrase)
+	if err != nil {
+		return tls.Certificate{}, "mTLS: could not parse PFX: " + err.Error()
+	}
+	cert := tls.Certificate{
+		Certificate: [][]byte{leaf.Raw},
+		PrivateKey:  privKey,
+		Leaf:        leaf,
+	}
+	return cert, ""
+}
+
+// parsePFX decodes a PKCS#12 bundle and returns the private key and leaf certificate.
+func parsePFX(pfxBytes []byte, passphrase string) (any, *x509.Certificate, error) {
+	priv, cert, err := pkcs12.Decode(pfxBytes, passphrase)
+	if err != nil {
+		return nil, nil, err
+	}
+	return priv, cert, nil
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

@@ -23,15 +23,33 @@
 
 		{{if .ShowLocal}}
 			<form class="auth-form" method="post" action="{{.Action}}">
-				<label for="username">Username</label>
-				<input id="username" name="username" placeholder="Username" autocomplete="username" required autofocus>
+				<label for="username">Email</label>
+				<input id="username" name="username" type="email" placeholder="you@example.com" autocomplete="username email" required autofocus>
 
 				<label for="password">Password</label>
 				<input id="password" name="password" type="password" placeholder="Password" autocomplete="{{.PasswordAutocomplete}}" required>
 
 				<button class="auth-button" type="submit">{{.Title}}</button>
 			</form>
+			{{if .ShowForgotLink}}<p class="auth-alt"><a href="/auth/forgot-password">Forgot password?</a></p>{{end}}
 			<p class="auth-alt"><a href="{{.AltHref}}">{{.AltText}}</a></p>
+		{{end}}
+
+		{{if .ShowForgotForm}}
+			<form class="auth-form" method="post" action="{{.Action}}">
+				<label for="email">Email</label>
+				<input id="email" name="email" type="email" placeholder="you@example.com" autocomplete="email" required autofocus>
+				<button class="auth-button" type="submit">Send reset link</button>
+			</form>
+			<p class="auth-alt"><a href="{{.AltHref}}">{{.AltText}}</a></p>
+		{{end}}
+
+		{{if .ShowResetForm}}
+			<form class="auth-form" method="post" action="{{.Action}}">
+				<label for="password">New password</label>
+				<input id="password" name="password" type="password" placeholder="New password" autocomplete="new-password" required autofocus>
+				<button class="auth-button" type="submit">Reset password</button>
+			</form>
 		{{end}}
 	</main>
 </body>
