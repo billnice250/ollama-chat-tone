@@ -27,7 +27,7 @@ BASIC_AUTH_USER="admin"
 BASIC_AUTH_PASSWORD="change-me"
 ```
 
-`OLLAMA_TIMEOUT` defaults to `5` minutes. It also accepts Go duration values such as `30s`, `5m`, or `1h`.
+`OLLAMA_TIMEOUT` defaults to `5` minutes. It also accepts Go duration values such as `30s`, `5m`, or `1h`. Set it to `0` to remove the client-side deadline for very long Ollama generations.
 
 `ADDR=":0"` is supported. The app binds a free port and logs the actual URL.
 
@@ -53,7 +53,7 @@ With Docker Compose:
 docker compose kill -s HUP ollama-chat-tone
 ```
 
-Reload updates runtime settings such as `APP_NAME`, `OLLAMA_URL`, `OLLAMA_TIMEOUT`, `DEFAULT_MODEL`, and auth settings. `ADDR` and `DB_PATH` still require a restart because the listener and database connection are already open.
+Reload updates runtime settings such as `APP_NAME`, `OLLAMA_URL`, `OLLAMA_TIMEOUT`, `DEFAULT_MODEL`, and auth settings. `ADDR` and `DB_PATH` still require a restart because the listener and database connection are already open. The reload control lives on the admin page with the Ollama settings.
 
 ## Run A Release Binary
 
