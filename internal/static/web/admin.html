@@ -12,7 +12,7 @@
 		<header class="admin-header">
 			<div class="admin-heading">
 				<h1 id="admin-title">Admin</h1>
-				<p id="admin-status">Loading users...</p>
+				<p id="admin-status">Loading...</p>
 			</div>
 			<nav class="admin-nav">
 				<a href="/">Chat</a>
@@ -25,6 +25,36 @@
 			<h2>Users</h2>
 			<div id="admin-error" class="error hidden"></div>
 			<div id="users-list" class="users-list"></div>
+		</section>
+
+		<section class="admin-panel" id="ollama-settings-panel">
+			<h2>Ollama Settings</h2>
+			<div id="settings-error" class="error hidden"></div>
+			<form id="ollama-settings-form" class="settings-form">
+				<label for="ollama-url">Ollama URL</label>
+				<input id="ollama-url" name="ollamaURL" type="url" placeholder="http://ollama:11434">
+
+				<label for="ollama-timeout">Timeout</label>
+				<input id="ollama-timeout" name="ollamaTimeout" type="text" placeholder="e.g. 5m or 10">
+
+				<label for="default-model">Default Model</label>
+				<input id="default-model" name="defaultModel" type="text" placeholder="e.g. llama3.2">
+
+				<button class="auth-button" type="submit">Save Settings</button>
+			</form>
+
+			<h3 style="margin-top:1.5rem">mTLS Certificate (PFX)</h3>
+			<p id="mtls-status"></p>
+			<form id="cert-upload-form" class="settings-form" enctype="multipart/form-data">
+				<label for="cert-file">PFX / P12 file</label>
+				<input id="cert-file" name="cert" type="file" accept=".pfx,.p12">
+
+				<label for="cert-pass">Passphrase (if any)</label>
+				<input id="cert-pass" name="passphrase" type="password" placeholder="Leave blank if none">
+
+				<button class="auth-button" type="submit">Upload Certificate</button>
+				<button id="remove-cert-btn" class="secondary-button" type="button">Remove Certificate</button>
+			</form>
 		</section>
 	</main>
 

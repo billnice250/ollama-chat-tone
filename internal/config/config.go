@@ -30,6 +30,16 @@ type Config struct {
 	OIDCClientID     string
 	OIDCClientSecret string
 	OIDCRedirectURL  string
+
+	// BaseURL is used to build absolute links in emails.
+	BaseURL string
+
+	// SMTP settings for transactional email (verification, password reset).
+	SMTPHost string
+	SMTPPort string
+	SMTPUser string
+	SMTPPass string
+	SMTPFrom string
 }
 
 func GenerateSessionSecret() string {
@@ -70,6 +80,12 @@ func Load() Config {
 		OIDCClientID:     getenv(fileEnv, "OIDC_CLIENT_ID", ""),
 		OIDCClientSecret: getenv(fileEnv, "OIDC_CLIENT_SECRET", ""),
 		OIDCRedirectURL:  getenv(fileEnv, "OIDC_REDIRECT_URL", "/auth/callback"),
+		BaseURL:          getenv(fileEnv, "BASE_URL", ""),
+		SMTPHost:         getenv(fileEnv, "SMTP_HOST", ""),
+		SMTPPort:         getenv(fileEnv, "SMTP_PORT", "587"),
+		SMTPUser:         getenv(fileEnv, "SMTP_USER", ""),
+		SMTPPass:         getenv(fileEnv, "SMTP_PASS", ""),
+		SMTPFrom:         getenv(fileEnv, "SMTP_FROM", ""),
 	}
 }
 

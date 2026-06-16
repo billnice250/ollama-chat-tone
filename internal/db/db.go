@@ -12,6 +12,13 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+type Token struct {
+	Token     string
+	Username  string
+	Kind      string
+	ExpiresAt time.Time
+}
+
 type Store struct{ DB *sql.DB }
 
 type Conversation struct {
@@ -49,13 +56,14 @@ type ChatJob struct {
 }
 
 type User struct {
-	Username     string `json:"username"`
-	PasswordHash string `json:"-"`
-	Approved     bool   `json:"approved"`
-	IsAdmin      bool   `json:"isAdmin"`
-	Active       bool   `json:"active"`
-	LastSeenAt   string `json:"lastSeenAt"`
-	CreatedAt    string `json:"createdAt"`
+	Username      string `json:"username"`
+	PasswordHash  string `json:"-"`
+	Approved      bool   `json:"approved"`
+	IsAdmin       bool   `json:"isAdmin"`
+	Active        bool   `json:"active"`
+	EmailVerified bool   `json:"emailVerified"`
+	LastSeenAt    string `json:"lastSeenAt"`
+	CreatedAt     string `json:"createdAt"`
 }
 
 func Open(path string) (*Store, error) {
@@ -100,6 +108,18 @@ CREATE TABLE IF NOT EXISTS chat_jobs (
   message_id INTEGER NOT NULL DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS tokens (
+  token TEXT PRIMARY KEY,
+  username TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  expires_at DATETIME NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );`)
 	if err != nil {
 		return nil, err
@@ -119,6 +139,7 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE users ADD COLUMN last_seen_at DATETIME DEFAULT NULL`,
 		`ALTER TABLE chat_jobs ADD COLUMN message_id INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil && !isDuplicateColumn(err) {
@@ -133,16 +154,16 @@ func (s *Store) EnsureAdmin(ctx context.Context, username, passwordHash string) 
 		return nil
 	}
 	_, err := s.DB.ExecContext(ctx, `
-INSERT INTO users (username, password_hash, approved, is_admin, created_at)
-VALUES (?, ?, 1, 1, CURRENT_TIMESTAMP)
-ON CONFLICT(username) DO UPDATE SET password_hash = excluded.password_hash, approved = 1, is_admin = 1`, username, passwordHash)
+INSERT INTO users (username, password_hash, approved, is_admin, email_verified, created_at)
+VALUES (?, ?, 1, 1, 1, CURRENT_TIMESTAMP)
+ON CONFLICT(username) DO UPDATE SET password_hash = excluded.password_hash, approved = 1, is_admin = 1, email_verified = 1`, username, passwordHash)
 	return err
 }
 
 func (s *Store) CreateUser(ctx context.Context, username, passwordHash string) error {
 	_, err := s.DB.ExecContext(ctx, `
-INSERT INTO users (username, password_hash, approved, is_admin, created_at)
-VALUES (?, ?, 0, 0, CURRENT_TIMESTAMP)`, username, passwordHash)
+INSERT INTO users (username, password_hash, approved, is_admin, email_verified, created_at)
+VALUES (?, ?, 0, 0, 0, CURRENT_TIMESTAMP)`, username, passwordHash)
 	return err
 }
 
@@ -159,18 +180,20 @@ ON CONFLICT(username) DO NOTHING`, username)
 
 func (s *Store) GetUser(ctx context.Context, username string) (*User, error) {
 	var u User
-	var approved, isAdmin, active int
+	var approved, isAdmin, active, emailVerified int
 	var lastSeen sql.NullString
 	err := s.DB.QueryRowContext(ctx, `
 SELECT username, password_hash, approved, is_admin, last_seen_at, created_at,
-       CASE WHEN last_seen_at IS NOT NULL AND datetime(last_seen_at) >= datetime('now', '-5 minutes') THEN 1 ELSE 0 END
+       CASE WHEN last_seen_at IS NOT NULL AND datetime(last_seen_at) >= datetime('now', '-5 minutes') THEN 1 ELSE 0 END,
+       email_verified
 FROM users
-WHERE username = ?`, username).Scan(&u.Username, &u.PasswordHash, &approved, &isAdmin, &lastSeen, &u.CreatedAt, &active)
+WHERE username = ?`, username).Scan(&u.Username, &u.PasswordHash, &approved, &isAdmin, &lastSeen, &u.CreatedAt, &active, &emailVerified)
 	if err != nil {
 		return nil, err
 	}
 	u.Approved = approved == 1
 	u.IsAdmin = isAdmin == 1
+	u.EmailVerified = emailVerified == 1
 	if lastSeen.Valid {
 		u.LastSeenAt = lastSeen.String
 	}
@@ -181,7 +204,8 @@ WHERE username = ?`, username).Scan(&u.Username, &u.PasswordHash, &approved, &is
 func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	rows, err := s.DB.QueryContext(ctx, `
 SELECT username, password_hash, approved, is_admin, last_seen_at, created_at,
-       CASE WHEN last_seen_at IS NOT NULL AND datetime(last_seen_at) >= datetime('now', '-5 minutes') THEN 1 ELSE 0 END AS active
+       CASE WHEN last_seen_at IS NOT NULL AND datetime(last_seen_at) >= datetime('now', '-5 minutes') THEN 1 ELSE 0 END AS active,
+       email_verified
 FROM users
 ORDER BY is_admin DESC, active DESC, approved ASC, COALESCE(last_seen_at, created_at) DESC`)
 	if err != nil {
@@ -192,14 +216,15 @@ ORDER BY is_admin DESC, active DESC, approved ASC, COALESCE(last_seen_at, create
 	var out []User
 	for rows.Next() {
 		var u User
-		var approved, isAdmin, active int
+		var approved, isAdmin, active, emailVerified int
 		var lastSeen sql.NullString
-		if err := rows.Scan(&u.Username, &u.PasswordHash, &approved, &isAdmin, &lastSeen, &u.CreatedAt, &active); err != nil {
+		if err := rows.Scan(&u.Username, &u.PasswordHash, &approved, &isAdmin, &lastSeen, &u.CreatedAt, &active, &emailVerified); err != nil {
 			return nil, err
 		}
 		u.Approved = approved == 1
 		u.IsAdmin = isAdmin == 1
 		u.Active = active == 1
+		u.EmailVerified = emailVerified == 1
 		if lastSeen.Valid {
 			u.LastSeenAt = lastSeen.String
 		}
@@ -242,6 +267,128 @@ func (s *Store) SetUserApproved(ctx context.Context, username string, approved b
 
 func isDuplicateColumn(err error) bool {
 	return err != nil && (errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "duplicate column name"))
+}
+
+// VerifyEmail marks a user's email as verified.
+func (s *Store) VerifyEmail(ctx context.Context, username string) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE users SET email_verified = 1 WHERE username = ?`, username)
+	return err
+}
+
+// ClearUserData deletes all conversations, messages and jobs for a user but keeps the user record.
+func (s *Store) ClearUserData(ctx context.Context, username string) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM conversations WHERE user_email = ?`, username)
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE conversation_id = ?`, id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM chat_jobs WHERE conversation_id = ?`, id); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM conversations WHERE user_email = ?`, username); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// CreateToken stores a time-limited token for email verification or password reset.
+func (s *Store) CreateToken(ctx context.Context, username, kind string, ttl time.Duration) (string, error) {
+	tok := newID()
+	expires := time.Now().Add(ttl)
+	_, err := s.DB.ExecContext(ctx, `
+INSERT INTO tokens (token, username, kind, expires_at, created_at)
+VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`, tok, username, kind, expires.UTC().Format("2006-01-02 15:04:05"))
+	if err != nil {
+		return "", err
+	}
+	return tok, nil
+}
+
+// ConsumeToken looks up a valid token, deletes it, and returns the associated username.
+// Returns sql.ErrNoRows if the token does not exist or is expired.
+func (s *Store) ConsumeToken(ctx context.Context, token, kind string) (string, error) {
+	var username string
+	err := s.DB.QueryRowContext(ctx, `
+SELECT username FROM tokens
+WHERE token = ? AND kind = ? AND datetime(expires_at) > datetime('now')`, token, kind).Scan(&username)
+	if err != nil {
+		return "", err
+	}
+	_, _ = s.DB.ExecContext(ctx, `DELETE FROM tokens WHERE token = ?`, token)
+	return username, nil
+}
+
+// SetPassword updates the password hash for a user.
+func (s *Store) SetPassword(ctx context.Context, username, passwordHash string) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE users SET password_hash = ? WHERE username = ?`, passwordHash, username)
+	return err
+}
+
+// GetSetting retrieves a setting value by key. Returns def if not found.
+func (s *Store) GetSetting(ctx context.Context, key, def string) string {
+	var val string
+	err := s.DB.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, key).Scan(&val)
+	if err != nil {
+		return def
+	}
+	return val
+}
+
+// SetSetting upserts a setting value.
+func (s *Store) SetSetting(ctx context.Context, key, value string) error {
+	_, err := s.DB.ExecContext(ctx, `
+INSERT INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`, key, value)
+	return err
+}
+
+// DeleteSetting removes a setting key.
+func (s *Store) DeleteSetting(ctx context.Context, key string) error {
+	_, err := s.DB.ExecContext(ctx, `DELETE FROM settings WHERE key = ?`, key)
+	return err
+}
+
+// ListSettings returns all settings as a map.
+func (s *Store) ListSettings(ctx context.Context) (map[string]string, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT key, value FROM settings`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		out[k] = v
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) ListConversations(ctx context.Context, user string) ([]Conversation, error) {
