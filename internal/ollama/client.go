@@ -48,18 +48,14 @@ func New(base string, timeout time.Duration) *Client {
 // NewWithTLS creates a Client that uses the given TLS configuration (e.g. for
 // mutual-TLS). Pass nil to use the default transport.
 func NewWithTLS(base string, timeout time.Duration, tlsCfg *tls.Config) *Client {
-	transport := http.DefaultTransport
+	var transport http.RoundTripper = http.DefaultTransport
 	if tlsCfg != nil {
 		transport = &http.Transport{TLSClientConfig: tlsCfg}
-	}
-	streamTransport := transport
-	if tlsCfg != nil {
-		streamTransport = &http.Transport{TLSClientConfig: tlsCfg}
 	}
 	return &Client{
 		BaseURL:    base,
 		HTTP:       &http.Client{Timeout: timeout, Transport: transport},
-		streamHTTP: &http.Client{Transport: streamTransport},
+		streamHTTP: &http.Client{Transport: transport},
 	}
 }
 

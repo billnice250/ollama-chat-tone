@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -288,9 +289,11 @@ func main() {
 				return
 			}
 			defer file.Close()
-			pfxBytes := make([]byte, 4<<20)
-			n, _ := file.Read(pfxBytes)
-			pfxBytes = pfxBytes[:n]
+			pfxBytes, err := io.ReadAll(io.LimitReader(file, 4<<20))
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "could not read cert file: "+err.Error())
+				return
+			}
 			passphrase := r.FormValue("passphrase")
 			// Validate the PFX before storing.
 			if _, _, err := parsePFX(pfxBytes, passphrase); err != nil {
