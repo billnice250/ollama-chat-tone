@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"html/template"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -96,6 +97,10 @@ func (m *Manager) RequireAuth(next http.Handler) http.Handler {
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
+			}
+			// Clear any stale or invalid session cookie (failed HMAC, missing user,
+			// or account not yet approved/verified) so it doesn't keep redirecting.
+			if readCookie(r, sessionCookie) != "" {
 				clearCookie(w, sessionCookie)
 			}
 		}
@@ -358,6 +363,7 @@ func (m *Manager) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !user.Approved {
+		log.Printf("auth: OIDC login denied for %q: account not approved", email)
 		clearCookie(w, "email")
 		m.writeAuthPage(w, authPageData{
 			AppName:    m.cfg.AppName,
@@ -398,14 +404,17 @@ func (m *Manager) localLogin(w http.ResponseWriter, r *http.Request) {
 	password := r.FormValue("password")
 	user, err := m.store.GetUser(r.Context(), username)
 	if err != nil || bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)) != nil {
+		log.Printf("auth: login failed for %q: invalid credentials", username)
 		m.writeLocalAuthPage(w, "Log in", "invalid email or password", false)
 		return
 	}
 	if !user.EmailVerified {
+		log.Printf("auth: login failed for %q: email not verified", username)
 		m.writeLocalAuthPage(w, "Log in", "please verify your email address before logging in", false)
 		return
 	}
 	if !user.Approved {
+		log.Printf("auth: login failed for %q: account not approved", username)
 		m.writeLocalAuthPage(w, "Log in", "your signup is waiting for admin approval", false)
 		return
 	}
