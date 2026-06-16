@@ -458,11 +458,12 @@ func (m *Manager) signSession(username string) string {
 
 func (m *Manager) readSession(r *http.Request) (string, bool) {
 	v := readCookie(r, sessionCookie)
-	username, sig, ok := strings.Cut(v, ".")
-	if !ok || username == "" {
+	i := strings.LastIndex(v, ".")
+	if i <= 0 || i == len(v)-1 {
 		return "", false
 	}
-	return username, hmac.Equal([]byte(m.signSession(username)), []byte(username+"."+sig))
+	username := v[:i]
+	return username, hmac.Equal([]byte(m.signSession(username)), []byte(v))
 }
 
 func (m *Manager) absURL(path string) string {
@@ -548,4 +549,3 @@ func (m *Manager) writeSimplePage(w http.ResponseWriter, title, message string) 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
-
