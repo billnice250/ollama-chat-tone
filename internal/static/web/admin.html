@@ -28,33 +28,61 @@
 		</section>
 
 		<section class="admin-panel" id="ollama-settings-panel">
-			<h2>Ollama Settings</h2>
+			<div class="panel-header">
+				<div>
+					<h2>Ollama Settings</h2>
+					<p class="panel-copy">Manage the Ollama endpoint, long-generation timeout, and optional mTLS client certificate.</p>
+				</div>
+				<div class="panel-actions">
+					<button id="reload-config" class="secondary-button" type="button">Reload config</button>
+				</div>
+			</div>
 			<div id="settings-error" class="error hidden"></div>
+			<div id="settings-status" class="success hidden"></div>
 			<form id="ollama-settings-form" class="settings-form">
-				<label for="ollama-url">Ollama URL</label>
-				<input id="ollama-url" name="ollamaURL" type="url" placeholder="http://ollama:11434">
+				<div class="settings-grid">
+					<label class="field-group" for="ollama-url">
+						<span>Ollama URL</span>
+						<input id="ollama-url" name="ollamaURL" type="url" inputmode="url" placeholder="http://ollama:11434" autocomplete="url" spellcheck="false">
+					</label>
 
-				<label for="ollama-timeout">Timeout</label>
-				<input id="ollama-timeout" name="ollamaTimeout" type="text" placeholder="e.g. 5m or 10">
+					<label class="field-group" for="ollama-timeout">
+						<span>Timeout</span>
+						<input id="ollama-timeout" name="ollamaTimeout" type="text" placeholder="e.g. 10m or 0" spellcheck="false">
+					</label>
 
-				<label for="default-model">Default Model</label>
-				<input id="default-model" name="defaultModel" type="text" placeholder="e.g. llama3.2">
-
-				<button class="auth-button" type="submit">Save Settings</button>
+					<label class="field-group" for="default-model">
+						<span>Default Model</span>
+						<input id="default-model" name="defaultModel" type="text" placeholder="e.g. llama3.2" autocapitalize="off" spellcheck="false">
+					</label>
+				</div>
+				<p class="field-help">Use <code>0</code> to disable the client-side request deadline for very long generations.</p>
+				<div class="form-actions">
+					<button id="save-settings-btn" class="auth-button" type="submit">Save Settings</button>
+				</div>
 			</form>
 
-			<h3 style="margin-top:1.5rem">mTLS Certificate (PFX)</h3>
-			<p id="mtls-status"></p>
-			<form id="cert-upload-form" class="settings-form" enctype="multipart/form-data">
-				<label for="cert-file">PFX / P12 file</label>
-				<input id="cert-file" name="cert" type="file" accept=".pfx,.p12">
+			<section class="settings-subpanel">
+				<h3>mTLS Certificate (PFX)</h3>
+				<p id="mtls-status" class="panel-copy"></p>
+				<form id="cert-upload-form" class="settings-form" enctype="multipart/form-data">
+					<div class="settings-grid">
+						<label class="field-group" for="cert-file">
+							<span>PFX / P12 file</span>
+							<input id="cert-file" name="cert" type="file" accept=".pfx,.p12">
+						</label>
 
-				<label for="cert-pass">Passphrase (if any)</label>
-				<input id="cert-pass" name="passphrase" type="password" placeholder="Leave blank if none">
-
-				<button class="auth-button" type="submit">Upload Certificate</button>
-				<button id="remove-cert-btn" class="secondary-button" type="button">Remove Certificate</button>
-			</form>
+						<label class="field-group" for="cert-pass">
+							<span>Passphrase (if any)</span>
+							<input id="cert-pass" name="passphrase" type="password" placeholder="Leave blank if none" autocomplete="new-password">
+						</label>
+					</div>
+					<div class="form-actions form-actions-split">
+						<button id="upload-cert-btn" class="auth-button" type="submit">Upload Certificate</button>
+						<button id="remove-cert-btn" class="secondary-button" type="button">Remove Certificate</button>
+					</div>
+				</form>
+			</section>
 		</section>
 	</main>
 

@@ -4,9 +4,13 @@ const el = {
 	error: document.getElementById('admin-error'),
 	users: document.getElementById('users-list'),
 	settingsError: document.getElementById('settings-error'),
+	settingsStatus: document.getElementById('settings-status'),
 	ollamaForm: document.getElementById('ollama-settings-form'),
+	saveSettingsBtn: document.getElementById('save-settings-btn'),
 	certForm: document.getElementById('cert-upload-form'),
+	uploadCertBtn: document.getElementById('upload-cert-btn'),
 	removeCertBtn: document.getElementById('remove-cert-btn'),
+	reloadConfigBtn: document.getElementById('reload-config'),
 	mtlsStatus: document.getElementById('mtls-status'),
 };
 
@@ -16,8 +20,17 @@ function showError(message) {
 }
 
 function showSettingsError(message) {
+	el.settingsStatus.textContent = '';
+	el.settingsStatus.classList.add('hidden');
 	el.settingsError.textContent = message;
 	el.settingsError.classList.remove('hidden');
+}
+
+function showSettingsStatus(message) {
+	el.settingsError.textContent = '';
+	el.settingsError.classList.add('hidden');
+	el.settingsStatus.textContent = message;
+	el.settingsStatus.classList.remove('hidden');
 }
 
 async function fetchJSON(url, options = {}) {
@@ -124,46 +137,81 @@ async function loadSettings() {
 	document.getElementById('ollama-timeout').value = s.ollamaTimeout || '';
 	document.getElementById('default-model').value = s.defaultModel || '';
 	el.mtlsStatus.textContent = s.mtlsEnabled ? '✓ mTLS certificate is active' : 'No mTLS certificate uploaded';
+	el.removeCertBtn.disabled = !s.mtlsEnabled;
 }
 
 el.ollamaForm.addEventListener('submit', async (e) => {
 	e.preventDefault();
 	el.settingsError.classList.add('hidden');
+	el.settingsStatus.classList.add('hidden');
+	el.saveSettingsBtn.disabled = true;
 	const fd = new FormData(el.ollamaForm);
 	const body = {};
 	for (const [k, v] of fd.entries()) { if (v) body[k] = v; }
 	try {
-		await fetchJSON('/api/admin/settings', {
+		const data = await fetchJSON('/api/admin/settings', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify(body),
 		});
 		await loadSettings();
+		const warnings = data.warnings && data.warnings.length ? ` (${data.warnings.join(', ')})` : '';
+		showSettingsStatus(`Settings saved${warnings}`);
 	} catch (err) {
 		showSettingsError(err.message);
+	} finally {
+		el.saveSettingsBtn.disabled = false;
 	}
 });
 
 el.certForm.addEventListener('submit', async (e) => {
 	e.preventDefault();
 	el.settingsError.classList.add('hidden');
+	el.settingsStatus.classList.add('hidden');
+	el.uploadCertBtn.disabled = true;
+	el.removeCertBtn.disabled = true;
 	const fd = new FormData(el.certForm);
 	try {
 		await fetchJSON('/api/admin/settings/ollama-cert', { method: 'POST', body: fd });
 		await loadSettings();
+		el.certForm.reset();
+		showSettingsStatus('Certificate uploaded');
 	} catch (err) {
 		showSettingsError(err.message);
+	} finally {
+		el.uploadCertBtn.disabled = false;
 	}
 });
 
 el.removeCertBtn.addEventListener('click', async () => {
 	if (!confirm('Remove the mTLS certificate?')) return;
 	el.settingsError.classList.add('hidden');
+	el.settingsStatus.classList.add('hidden');
+	el.removeCertBtn.disabled = true;
 	try {
 		await fetchJSON('/api/admin/settings/ollama-cert', { method: 'DELETE' });
 		await loadSettings();
+		showSettingsStatus('Certificate removed');
 	} catch (err) {
 		showSettingsError(err.message);
+	} finally {
+		el.removeCertBtn.disabled = false;
+	}
+});
+
+el.reloadConfigBtn.addEventListener('click', async () => {
+	el.settingsError.classList.add('hidden');
+	el.settingsStatus.classList.add('hidden');
+	el.reloadConfigBtn.disabled = true;
+	try {
+		const data = await fetchJSON('/api/config/reload', { method: 'POST' });
+		await Promise.all([loadUsers(), loadSettings()]);
+		const warnings = data.warnings && data.warnings.length ? ` (${data.warnings.join(', ')})` : '';
+		showSettingsStatus(`Config reloaded${warnings}`);
+	} catch (err) {
+		showSettingsError(`Could not reload config: ${err.message}`);
+	} finally {
+		el.reloadConfigBtn.disabled = false;
 	}
 });
 

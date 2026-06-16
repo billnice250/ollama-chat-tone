@@ -37,7 +37,9 @@ type Model struct {
 
 type Client struct {
 	BaseURL    string
+	timeout    time.Duration
 	HTTP       *http.Client
+	chatHTTP   *http.Client
 	streamHTTP *http.Client
 }
 
@@ -49,12 +51,20 @@ func New(base string, timeout time.Duration) *Client {
 // mutual-TLS). Pass nil to use the default transport.
 func NewWithTLS(base string, timeout time.Duration, tlsCfg *tls.Config) *Client {
 	var transport http.RoundTripper = http.DefaultTransport
-	if tlsCfg != nil {
+	if baseTransport, ok := http.DefaultTransport.(*http.Transport); ok {
+		cloned := baseTransport.Clone()
+		if tlsCfg != nil {
+			cloned.TLSClientConfig = tlsCfg
+		}
+		transport = cloned
+	} else if tlsCfg != nil {
 		transport = &http.Transport{TLSClientConfig: tlsCfg}
 	}
 	return &Client{
 		BaseURL:    base,
+		timeout:    timeout,
 		HTTP:       &http.Client{Timeout: timeout, Transport: transport},
+		chatHTTP:   &http.Client{Transport: transport},
 		streamHTTP: &http.Client{Transport: transport},
 	}
 }
@@ -69,13 +79,16 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 		return nil, err
 	}
 
+	ctx, cancel := c.chatContext(ctx)
+	defer cancel()
+
 	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/api/chat", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	hreq.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.HTTP.Do(hreq)
+	resp, err := c.chatHTTP.Do(hreq)
 	if err != nil {
 		return nil, err
 	}
@@ -132,6 +145,19 @@ func (c *Client) StreamChat(ctx context.Context, req ChatRequest, onChunk func(C
 			return nil
 		}
 	}
+}
+
+func (c *Client) chatContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if c.timeout <= 0 {
+		return ctx, func() {}
+	}
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, c.timeout)
 }
 
 func (c *Client) Models(ctx context.Context) ([]Model, error) {
