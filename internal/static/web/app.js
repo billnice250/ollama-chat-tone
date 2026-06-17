@@ -38,7 +38,7 @@ const state = {
 	chats: [],
 	streamController: null,
 	activeJob: null,
-	jobPollTimer: 0,
+	jobEventSource: null,
 };
 
 function showError(message) {
@@ -579,7 +579,7 @@ function store() {
 
 async function selectChat(id) {
 	clearError();
-	stopJobPolling();
+	stopJobStream();
 	state.activeJob = null;
 	setStreaming(false);
 	try {
@@ -657,10 +657,10 @@ function setStreaming(streaming) {
 	el.prompt.disabled = streaming;
 }
 
-function stopJobPolling() {
-	if (state.jobPollTimer) {
-		clearTimeout(state.jobPollTimer);
-		state.jobPollTimer = 0;
+function stopJobStream() {
+	if (state.jobEventSource) {
+		state.jobEventSource.close();
+		state.jobEventSource = null;
 	}
 }
 
@@ -705,7 +705,7 @@ async function startServerJob(chat, model, assistant) {
 	state.activeJob = { conversationId: chat.id, id: job.id };
 	setStreaming(true);
 	render();
-	pollServerJob(chat, job.id, assistant);
+	streamServerJob(chat, job.id, assistant);
 }
 
 async function attachActiveJob(chat) {
@@ -720,42 +720,53 @@ async function attachActiveJob(chat) {
 	state.activeJob = { conversationId: chat.id, id: data.job.id };
 	setStreaming(true);
 	render();
-	pollServerJob(chat, data.job.id, assistant);
+	streamServerJob(chat, data.job.id, assistant);
 }
 
-function pollServerJob(chat, jobId, assistant) {
-	stopJobPolling();
-	state.jobPollTimer = window.setTimeout(async () => {
+function streamServerJob(chat, jobId, assistant) {
+	stopJobStream();
+	const url = `/api/conversations/${encodeURIComponent(chat.id)}/jobs/${encodeURIComponent(jobId)}/events`;
+	const es = new EventSource(url);
+	state.jobEventSource = es;
+
+	function handleJobData(job) {
+		assistant.content = job.content || '';
+		assistant.thinking = job.thinking || '';
+		assistant.model = job.model || assistant.model;
+		el.appStatus.textContent = assistant.content
+			? `Streaming from ${assistant.model}`
+			: `${assistant.model} is thinking...`;
+
+		if (job.status === 'running') {
+			if (state.activeChatId === chat.id) {
+				render();
+			}
+			return;
+		}
+
+		// Terminal state — stop streaming and clean up.
+		stopJobStream();
+		assistant.pending = false;
+		state.activeJob = null;
+		setStreaming(false);
+		el.appStatus.textContent = `Model: ${assistant.model}`;
+
+		if (job.status === 'complete') {
+			store().loadChat(chat.id).then(() => render()).catch((err) => showError(err.message));
+		} else if (job.status === 'canceled') {
+			assistant.content = assistant.content ? `${assistant.content}\n\n[stopped]` : '[stopped]';
+		} else if (job.status === 'error') {
+			assistant.content = `Error: ${job.error || 'generation failed'}`;
+			showError(job.error || 'generation failed');
+		}
+		render();
+	}
+
+	es.onmessage = (event) => {
 		try {
-			const data = await fetchJSON(`/api/conversations/${encodeURIComponent(chat.id)}/jobs/${encodeURIComponent(jobId)}`);
-			const job = data.job;
-			assistant.content = job.content || '';
-			assistant.thinking = job.thinking || '';
-			assistant.model = job.model || assistant.model;
-			el.appStatus.textContent = assistant.content ? `Streaming from ${assistant.model}` : `${assistant.model} is thinking...`;
-
-			if (job.status === 'running') {
-				if (state.activeChatId === chat.id) {
-					render();
-				}
-				pollServerJob(chat, jobId, assistant);
-				return;
-			}
-
-			assistant.pending = false;
-			state.activeJob = null;
-			setStreaming(false);
-			el.appStatus.textContent = `Model: ${assistant.model}`;
-			if (job.status === 'complete') {
-				await store().loadChat(chat.id);
-			} else if (job.status === 'canceled') {
-				assistant.content = assistant.content ? `${assistant.content}\n\n[stopped]` : '[stopped]';
-			} else if (job.status === 'error') {
-				assistant.content = `Error: ${job.error || 'generation failed'}`;
-				showError(job.error || 'generation failed');
-			}
-			render();
+			handleJobData(JSON.parse(event.data));
 		} catch (err) {
+			stopJobStream();
 			state.activeJob = null;
 			setStreaming(false);
 			assistant.pending = false;
@@ -763,7 +774,24 @@ function pollServerJob(chat, jobId, assistant) {
 			showError(err.message);
 			render();
 		}
-	}, 750);
+	};
+
+	es.onerror = () => {
+		// Only treat as an error when the job is still active.  When the server
+		// closes the SSE connection after a terminal event the browser fires
+		// onerror; by then state.activeJob is already null so we ignore it.
+		if (state.activeJob) {
+			stopJobStream();
+			state.activeJob = null;
+			setStreaming(false);
+			assistant.pending = false;
+			if (!assistant.content) {
+				assistant.content = 'Error: connection lost';
+				showError('Connection lost while streaming response');
+			}
+			render();
+		}
+	};
 }
 
 async function cancelServerJob() {
@@ -774,7 +802,7 @@ async function cancelServerJob() {
 	await fetchJSON(`/api/conversations/${encodeURIComponent(job.conversationId)}/jobs/${encodeURIComponent(job.id)}/cancel`, {
 		method: 'POST',
 	});
-	stopJobPolling();
+	stopJobStream();
 	state.activeJob = null;
 	setStreaming(false);
 	const chat = activeChat();

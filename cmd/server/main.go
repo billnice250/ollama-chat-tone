@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log"
@@ -696,13 +697,26 @@ func isAdmin(r *http.Request) bool {
 	return v
 }
 
+// jobUpdate carries a job's latest state to SSE subscribers.
+type jobUpdate struct {
+	Status   string `json:"status"`
+	Content  string `json:"content"`
+	Thinking string `json:"thinking,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
 type jobManager struct {
-	mu      sync.Mutex
-	cancels map[string]context.CancelFunc
+	mu          sync.Mutex
+	cancels     map[string]context.CancelFunc
+	subscribers map[string][]chan jobUpdate
 }
 
 func newJobManager() *jobManager {
-	return &jobManager{cancels: map[string]context.CancelFunc{}}
+	return &jobManager{
+		cancels:     map[string]context.CancelFunc{},
+		subscribers: map[string][]chan jobUpdate{},
+	}
 }
 
 func (m *jobManager) add(id string, cancel context.CancelFunc) {
@@ -711,10 +725,17 @@ func (m *jobManager) add(id string, cancel context.CancelFunc) {
 	m.cancels[id] = cancel
 }
 
+// remove cleans up the job and closes all SSE subscriber channels.
+// It must only be called once the final publish has already been issued,
+// so subscribers drain the channel before the close is observed.
 func (m *jobManager) remove(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.cancels, id)
+	for _, ch := range m.subscribers[id] {
+		close(ch)
+	}
+	delete(m.subscribers, id)
 }
 
 func (m *jobManager) cancel(id string) {
@@ -723,6 +744,53 @@ func (m *jobManager) cancel(id string) {
 	m.mu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+}
+
+// subscribe returns a channel that receives jobUpdate events for the given job.
+// If the job is not currently running the returned channel is already closed.
+func (m *jobManager) subscribe(id string) chan jobUpdate {
+	ch := make(chan jobUpdate, 128)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.cancels[id]; !ok {
+		// Job already finished – return a closed channel so callers exit immediately.
+		close(ch)
+		return ch
+	}
+	m.subscribers[id] = append(m.subscribers[id], ch)
+	return ch
+}
+
+// unsubscribe removes ch from the subscriber list for id.
+func (m *jobManager) unsubscribe(id string, ch chan jobUpdate) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	subs := m.subscribers[id]
+	for i, s := range subs {
+		if s == ch {
+			m.subscribers[id] = append(subs[:i], subs[i+1:]...)
+			return
+		}
+	}
+}
+
+// publish fans out an update to all current subscribers of id.
+// Slow subscribers are skipped (non-blocking send) to avoid stalling the job.
+func (m *jobManager) publish(id string, update jobUpdate) {
+	m.mu.Lock()
+	if len(m.subscribers[id]) == 0 {
+		m.mu.Unlock()
+		return
+	}
+	chs := make([]chan jobUpdate, len(m.subscribers[id]))
+	copy(chs, m.subscribers[id])
+	m.mu.Unlock()
+	for _, ch := range chs {
+		select {
+		case ch <- update:
+		default:
+		}
 	}
 }
 
@@ -877,6 +945,10 @@ func handleChatJob(w http.ResponseWriter, r *http.Request, store *db.Store, oc *
 			auth.WriteJSON(w, map[string]any{"job": job})
 			return
 		}
+		if len(parts) == 2 && parts[1] == "events" && r.Method == http.MethodGet {
+			handleJobEvents(w, r, store, jobs, user, conversationID, jobID)
+			return
+		}
 		if len(parts) == 2 && parts[1] == "cancel" && r.Method == http.MethodPost {
 			jobs.cancel(jobID)
 			if err := store.CancelChatJob(r.Context(), user, conversationID, jobID); err != nil {
@@ -891,6 +963,71 @@ func handleChatJob(w http.ResponseWriter, r *http.Request, store *db.Store, oc *
 	writeError(w, http.StatusNotFound, "job not found")
 }
 
+// handleJobEvents streams real-time job updates to the client via Server-Sent Events.
+// The client opens a long-lived GET connection and receives a data event for every
+// chunk published by the background job, plus a final event when the job finishes.
+func handleJobEvents(w http.ResponseWriter, r *http.Request, store *db.Store, jobs *jobManager, user, conversationID, jobID string) {
+	rc := http.NewResponseController(w)
+
+	// Subscribe BEFORE reading the DB so we cannot miss a publish that lands
+	// between the DB read and us starting to wait on the channel.
+	ch := jobs.subscribe(jobID)
+	defer jobs.unsubscribe(jobID, ch)
+
+	job, err := store.GetChatJob(r.Context(), user, conversationID, jobID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "job not found")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no") // disable nginx buffering
+	w.WriteHeader(http.StatusOK)
+
+	// Send the current snapshot so the client is never stuck waiting for the
+	// first update even if the job is already partially or fully complete.
+	writeSSEJobData(w, rc, job)
+	if job.Status != "running" {
+		return
+	}
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case update, ok := <-ch:
+			if !ok {
+				// Channel was closed by remove() after the final publish;
+				// the client already received the terminal event.
+				return
+			}
+			writeSSEJobData(w, rc, &db.ChatJob{
+				ID:             job.ID,
+				ConversationID: job.ConversationID,
+				Status:         update.Status,
+				Content:        update.Content,
+				Thinking:       update.Thinking,
+				Model:          update.Model,
+				Error:          update.Error,
+			})
+			if update.Status != "running" {
+				return
+			}
+		}
+	}
+}
+
+// writeSSEJobData serialises job as a plain SSE data event and flushes.
+func writeSSEJobData(w http.ResponseWriter, rc *http.ResponseController, job *db.ChatJob) {
+	b, err := json.Marshal(job)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(w, "data: %s\n\n", b)
+	_ = rc.Flush()
+}
+
 func runChatJob(ctx context.Context, store *db.Store, oc *ollama.Client, jobs *jobManager, user, conversationID, jobID, model string, messages []ollama.Message, think bool) {
 	defer jobs.remove(jobID)
 	content := ""
@@ -901,25 +1038,31 @@ func runChatJob(ctx context.Context, store *db.Store, oc *ollama.Client, jobs *j
 		if think {
 			thinking += chunk.Message.Thinking
 		}
+		jobs.publish(jobID, jobUpdate{Status: "running", Content: content, Thinking: thinking, Model: model})
 		return store.UpdateChatJob(context.Background(), user, conversationID, jobID, content, thinking)
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			jobs.publish(jobID, jobUpdate{Status: "canceled", Content: content, Thinking: thinking, Model: model})
 			if cancelErr := store.CancelChatJob(context.Background(), user, conversationID, jobID); cancelErr != nil {
 				log.Printf("runChatJob: cancel job=%s err=%v", jobID, cancelErr)
 			}
 			return
 		}
+		jobs.publish(jobID, jobUpdate{Status: "error", Content: content, Thinking: thinking, Model: model, Error: err.Error()})
 		if failErr := store.FailChatJob(context.Background(), user, conversationID, jobID, err.Error()); failErr != nil {
 			log.Printf("runChatJob: fail job=%s err=%v", jobID, failErr)
 		}
 		return
 	}
 	if _, err := store.CompleteChatJob(context.Background(), user, conversationID, jobID, content, thinking, model); err != nil {
+		jobs.publish(jobID, jobUpdate{Status: "error", Content: content, Thinking: thinking, Model: model, Error: err.Error()})
 		if failErr := store.FailChatJob(context.Background(), user, conversationID, jobID, err.Error()); failErr != nil {
 			log.Printf("runChatJob: fail job=%s after complete err=%v", jobID, failErr)
 		}
+		return
 	}
+	jobs.publish(jobID, jobUpdate{Status: "complete", Content: content, Thinking: thinking, Model: model})
 }
 
 func writeDBError(w http.ResponseWriter, err error, notFound string) {
