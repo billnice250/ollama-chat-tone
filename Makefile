@@ -4,8 +4,8 @@ APP_BUNDLE_ID ?= it.billnice.chattone
 CMD ?= ./cmd/server
 DIST_DIR ?= dist
 BIN_DIR ?= bin
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS ?= -s -w -X main.version=$(VERSION)
+VERSION ?= $(shell tag=$$(git describe --tags --exact-match 2>/dev/null); dirty=$$(git diff --quiet --ignore-submodules HEAD 2>/dev/null || echo -dirty); if [ -n "$$tag" ]; then printf '%s%s' "$$tag" "$$dirty"; else sha=$$(git rev-parse --verify HEAD 2>/dev/null); if [ -n "$$sha" ]; then printf '%s%s' "$$(printf '%s' "$$sha" | sed 's/.*\(.......\)$$/\1/')" "$$dirty"; else printf dev; fi; fi)
+LDFLAGS ?= -s -w
 GO_CACHE_DIR ?= $(CURDIR)/.gocache
 ICON_ICNS ?= assets/logo.icns
 ICON_ICO ?= assets/logo.ico

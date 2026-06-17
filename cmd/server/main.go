@@ -36,8 +36,6 @@ import (
 	"golang.org/x/crypto/pkcs12"
 )
 
-var version = ""
-
 func main() {
 	cfg := config.Load()
 	store, err := db.Open(cfg.DBPath)
@@ -450,9 +448,6 @@ func main() {
 func contextBackground() context.Context { return context.Background() }
 
 func appVersion() string {
-	if version != "" && version != "dev" {
-		return version
-	}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return "dev"
@@ -469,8 +464,8 @@ func appVersion() string {
 	if revision == "" {
 		return "dev"
 	}
-	if len(revision) > 12 {
-		revision = revision[:12]
+	if len(revision) > 7 {
+		revision = revision[len(revision)-7:]
 	}
 	if modified == "true" {
 		return revision + "-dirty"

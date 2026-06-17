@@ -144,16 +144,7 @@ docker build -t ollama-chat-tone:local .
 docker run --rm -p 8080:8080 --env-file .env -e DB_PATH=/data/app.db -v ollama-chat-tone-data:/data ollama-chat-tone:local
 ```
 
-Image builds set the app version automatically:
-
-- use the tag that points at `HEAD` when one exists
-- otherwise use the short commit hash (`:6`)
-
-You can still override it explicitly with a build arg:
-
-```bash
-docker build --build-arg VERSION="$(git describe --tags --always --dirty)" -t ollama-chat-tone:local .
-```
+Image builds set the app-page version from Go VCS metadata automatically. The Docker build context must include `.git`; this repo does not ignore `.git` in [.dockerignore](.dockerignore). The displayed fallback is the last 7 characters of the commit hash, plus `-dirty` when Go reports local changes.
 
 If Ollama is running on the host machine from Docker Desktop, set:
 
