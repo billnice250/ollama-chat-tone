@@ -19,6 +19,7 @@ const el = {
 	error: document.getElementById('error'),
 	prompt: document.getElementById('prompt'),
 	send: document.getElementById('send'),
+	jumpBottom: document.getElementById('jump-bottom'),
 	composer: document.getElementById('composer'),
 	newChat: document.getElementById('new-chat'),
 	deleteAccount: document.getElementById('delete-account'),
@@ -39,6 +40,7 @@ const state = {
 	streamController: null,
 	activeJob: null,
 	jobEventSource: null,
+	followMessages: true,
 };
 
 function showError(message) {
@@ -103,6 +105,7 @@ function renderEmptyShell() {
 	el.chatMeta.textContent = 'No messages yet';
 	el.chatList.replaceChildren();
 	el.messages.replaceChildren(emptyState());
+	updateJumpBottom();
 }
 
 function renderChatList() {
@@ -135,16 +138,39 @@ function renderChatList() {
 
 function renderMessages(chat) {
 	const messages = chat.messages || [];
+	const shouldFollow = state.followMessages || isNearMessagesBottom();
 	el.messages.replaceChildren();
 	if (messages.length === 0) {
 		el.messages.append(emptyState());
+		state.followMessages = true;
+		updateJumpBottom();
 		return;
 	}
 
 	for (const message of messages) {
 		el.messages.append(messageNode(message));
 	}
+	if (shouldFollow) {
+		scrollMessagesToBottom();
+	} else {
+		updateJumpBottom();
+	}
+}
+
+function isNearMessagesBottom() {
+	const remaining = el.messages.scrollHeight - el.messages.scrollTop - el.messages.clientHeight;
+	return remaining < 80;
+}
+
+function scrollMessagesToBottom() {
 	el.messages.scrollTop = el.messages.scrollHeight;
+	state.followMessages = true;
+	updateJumpBottom();
+}
+
+function updateJumpBottom() {
+	const show = !state.followMessages && !isNearMessagesBottom();
+	el.jumpBottom.classList.toggle('hidden', !show);
 }
 
 function emptyState() {
@@ -581,6 +607,7 @@ async function selectChat(id) {
 	clearError();
 	stopJobStream();
 	state.activeJob = null;
+	state.followMessages = true;
 	setStreaming(false);
 	try {
 		await store().loadChat(id);
@@ -597,6 +624,7 @@ async function createChat() {
 	clearError();
 	const chat = await store().createChat();
 	state.activeChatId = chat.id;
+	state.followMessages = true;
 	closeMobileSidebar();
 	render();
 }
@@ -927,6 +955,7 @@ async function send(content) {
 	const currentModel = selectedModel();
 	const userMessage = { role: 'user', content };
 	chat.messages.push(userMessage);
+	state.followMessages = true;
 	await store().addMessage(chat, userMessage);
 	await store().save();
 	render();
@@ -1042,6 +1071,15 @@ el.confirmDeleteAccount.addEventListener('click', () => {
 el.refreshModels.addEventListener('click', () => {
 	clearError();
 	loadModels().catch((err) => showError(`Could not load models: ${err.message}`));
+});
+
+el.messages.addEventListener('scroll', () => {
+	state.followMessages = isNearMessagesBottom();
+	updateJumpBottom();
+});
+
+el.jumpBottom.addEventListener('click', () => {
+	scrollMessagesToBottom();
 });
 
 el.composer.addEventListener('submit', (event) => {

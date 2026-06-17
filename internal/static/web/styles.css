@@ -450,11 +450,33 @@ select {
 	text-decoration: none;
 }
 
+.messages-wrap {
+	position: relative;
+	min-height: 0;
+	overflow: hidden;
+}
+
 .messages {
+	height: 100%;
 	min-height: 0;
 	overflow: auto;
 	padding: 28px 20px;
 	background: linear-gradient(180deg, var(--color-messages-start) 0%, var(--color-messages-end) 100%);
+}
+
+.jump-bottom {
+	position: absolute;
+	right: 24px;
+	bottom: 18px;
+	height: 34px;
+	padding: 0 12px;
+	border: 1px solid var(--color-line);
+	border-radius: var(--radius);
+	background: var(--color-surface);
+	color: var(--color-accent-strong);
+	box-shadow: var(--shadow-overlay);
+	font-size: 13px;
+	font-weight: 750;
 }
 
 .empty {
@@ -1033,6 +1055,11 @@ textarea::placeholder {
 
 	.messages {
 		padding: 18px 12px;
+	}
+
+	.jump-bottom {
+		right: 14px;
+		bottom: 14px;
 	}
 
 	.bubble {

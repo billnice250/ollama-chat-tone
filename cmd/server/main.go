@@ -500,7 +500,7 @@ func appVersion() string {
 	}
 	revision = CommitShortName(revision)
 	if modified == "true" {
-		return revision + "-dirty"
+		return revision + "*"
 	}
 	return revision
 }
@@ -766,6 +766,13 @@ func (m *jobManager) add(id string, cancel context.CancelFunc) {
 	m.cancels[id] = cancel
 }
 
+func (m *jobManager) running(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.cancels[id]
+	return ok
+}
+
 // remove cleans up the job and closes all SSE subscriber channels.
 // It must only be called once the final publish has already been issued,
 // so subscribers drain the channel before the close is observed.
@@ -949,9 +956,19 @@ func handleChatJob(w http.ResponseWriter, r *http.Request, store *db.Store, oc *
 		if req.Model == "" {
 			req.Model = "unknown"
 		}
-		if _, err := store.ActiveChatJob(r.Context(), user, conversationID); err == nil {
-			writeError(w, http.StatusConflict, "conversation already has a running response")
-			return
+		if active, err := store.ActiveChatJob(r.Context(), user, conversationID); err == nil {
+			if jobs.running(active.ID) {
+				writeError(w, http.StatusConflict, "conversation already has a running response")
+				return
+			}
+			msg := "previous response was interrupted before it could finish"
+			if err := retryDBWrite(r.Context(), func(ctx context.Context) error {
+				return store.FailChatJob(ctx, user, conversationID, active.ID, msg)
+			}); err != nil {
+				writeError(w, http.StatusServiceUnavailable, "previous response is still being finalized; try again")
+				return
+			}
+			log.Printf("cleared orphaned chat job user=%q conversation=%s job=%s", user, conversationID, active.ID)
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -980,6 +997,17 @@ func handleChatJob(w http.ResponseWriter, r *http.Request, store *db.Store, oc *
 		}
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if !jobs.running(job.ID) {
+			msg := "previous response was interrupted before it could finish"
+			if err := retryDBWrite(r.Context(), func(ctx context.Context) error {
+				return store.FailChatJob(ctx, user, conversationID, job.ID, msg)
+			}); err != nil {
+				writeError(w, http.StatusServiceUnavailable, "previous response is still being finalized; try again")
+				return
+			}
+			auth.WriteJSON(w, map[string]any{"job": nil})
 			return
 		}
 		auth.WriteJSON(w, map[string]any{"job": job})
@@ -1090,6 +1118,7 @@ func runChatJob(ctx context.Context, store *db.Store, oc *ollama.Client, jobs *j
 	defer jobs.remove(jobID)
 	content := ""
 	thinking := ""
+	lastPersist := time.Time{}
 	req := ollama.ChatRequest{Model: model, Messages: messages, Stream: true, Think: &think}
 	err := oc.StreamChat(ctx, req, func(chunk ollama.ChatResponse) error {
 		content += chunk.Message.Content
@@ -1097,23 +1126,42 @@ func runChatJob(ctx context.Context, store *db.Store, oc *ollama.Client, jobs *j
 			thinking += chunk.Message.Thinking
 		}
 		jobs.publish(jobID, jobUpdate{Status: "running", Content: content, Thinking: thinking, Model: model})
-		return store.UpdateChatJob(context.Background(), user, conversationID, jobID, content, thinking)
+		if time.Since(lastPersist) < 500*time.Millisecond {
+			return nil
+		}
+		lastPersist = time.Now()
+		if err := store.UpdateChatJob(context.Background(), user, conversationID, jobID, content, thinking); err != nil {
+			if db.IsBusy(err) {
+				log.Printf("runChatJob: skipped busy progress update job=%s err=%v", jobID, err)
+				return nil
+			}
+			return err
+		}
+		return nil
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			jobs.publish(jobID, jobUpdate{Status: "canceled", Content: content, Thinking: thinking, Model: model})
-			if cancelErr := store.CancelChatJob(context.Background(), user, conversationID, jobID); cancelErr != nil {
+			if cancelErr := retryDBWrite(context.Background(), func(ctx context.Context) error {
+				return store.CancelChatJob(ctx, user, conversationID, jobID)
+			}); cancelErr != nil {
 				log.Printf("runChatJob: cancel job=%s err=%v", jobID, cancelErr)
 			}
 			return
 		}
 		jobs.publish(jobID, jobUpdate{Status: "error", Content: content, Thinking: thinking, Model: model, Error: err.Error()})
-		if failErr := store.FailChatJob(context.Background(), user, conversationID, jobID, err.Error()); failErr != nil {
+		if failErr := retryDBWrite(context.Background(), func(ctx context.Context) error {
+			return store.FailChatJob(ctx, user, conversationID, jobID, err.Error())
+		}); failErr != nil {
 			log.Printf("runChatJob: fail job=%s err=%v", jobID, failErr)
 		}
 		return
 	}
-	if _, err := store.CompleteChatJob(context.Background(), user, conversationID, jobID, content, thinking, model); err != nil {
+	err = retryDBWrite(context.Background(), func(ctx context.Context) error {
+		_, err := store.CompleteChatJob(ctx, user, conversationID, jobID, content, thinking, model)
+		return err
+	})
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			if job, getErr := store.GetChatJob(context.Background(), user, conversationID, jobID); getErr == nil && job.Status != "running" {
 				jobs.publish(jobID, jobUpdate{Status: job.Status, Content: job.Content, Thinking: job.Thinking, Model: job.Model, Error: job.Error})
@@ -1121,12 +1169,36 @@ func runChatJob(ctx context.Context, store *db.Store, oc *ollama.Client, jobs *j
 			}
 		}
 		jobs.publish(jobID, jobUpdate{Status: "error", Content: content, Thinking: thinking, Model: model, Error: err.Error()})
-		if failErr := store.FailChatJob(context.Background(), user, conversationID, jobID, err.Error()); failErr != nil {
+		if failErr := retryDBWrite(context.Background(), func(ctx context.Context) error {
+			return store.FailChatJob(ctx, user, conversationID, jobID, err.Error())
+		}); failErr != nil {
 			log.Printf("runChatJob: fail job=%s after complete err=%v", jobID, failErr)
 		}
 		return
 	}
 	jobs.publish(jobID, jobUpdate{Status: "complete", Content: content, Thinking: thinking, Model: model})
+}
+
+func retryDBWrite(parent context.Context, fn func(context.Context) error) error {
+	var lastErr error
+	for attempt := 0; attempt < 6; attempt++ {
+		ctx, cancel := context.WithTimeout(parent, 8*time.Second)
+		err := fn(ctx)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !db.IsBusy(err) {
+			return err
+		}
+		select {
+		case <-parent.Done():
+			return parent.Err()
+		case <-time.After(time.Duration(attempt+1) * 250 * time.Millisecond):
+		}
+	}
+	return lastErr
 }
 
 func writeDBError(w http.ResponseWriter, err error, notFound string) {

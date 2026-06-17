@@ -71,6 +71,11 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL;`); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	_, err = db.Exec(`
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
@@ -128,6 +133,17 @@ CREATE TABLE IF NOT EXISTS settings (
 		return nil, err
 	}
 	return &Store{DB: db}, nil
+}
+
+func IsBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "database is locked") ||
+		strings.Contains(msg, "database table is locked") ||
+		strings.Contains(msg, "sqlite_busy") ||
+		strings.Contains(msg, "busy")
 }
 
 func migrate(db *sql.DB) error {

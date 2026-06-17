@@ -45,7 +45,10 @@
 				</div>
 			</header>
 
-			<section id="messages" class="messages" aria-live="polite"></section>
+			<div class="messages-wrap">
+				<section id="messages" class="messages" aria-live="polite"></section>
+				<button id="jump-bottom" class="jump-bottom hidden" type="button" aria-label="Jump to latest message">Bottom</button>
+			</div>
 			<div id="error" class="error hidden"></div>
 
 			<form id="composer" class="composer">
