@@ -3,6 +3,8 @@
 FROM golang:1.25-alpine AS build
 WORKDIR /src
 
+RUN apk add --no-cache ca-certificates git
+
 COPY go.mod go.sum* ./
 RUN go mod download
 
@@ -18,7 +20,8 @@ RUN build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
 RUN echo "embedded Go build metadata:" && \
     go version -m /out/server && \
     echo "embedded VCS metadata:" && \
-    go version -m /out/server | grep -E 'build[[:space:]]+vcs'
+    go version -m /out/server | grep -E 'build[[:space:]]+vcs' || \
+    echo "WARNING: no embedded VCS metadata found; check that .git is included in the Docker build context"
 
 
 FROM alpine:latest AS production
