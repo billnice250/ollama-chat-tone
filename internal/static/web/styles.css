@@ -1009,10 +1009,16 @@ textarea::placeholder {
 }
 
 @media (max-width: 760px) {
+	body {
+		padding: 8px;
+	}
+
 	.app {
 		grid-template-columns: 1fr;
-		height: 100vh;
+		height: calc(100dvh - 16px);
 		min-height: 0;
+		border: 1px solid var(--color-line);
+		border-radius: var(--radius);
 	}
 
 	.sidebar {
@@ -1037,7 +1043,7 @@ textarea::placeholder {
 	}
 
 	.main {
-		height: 100dvh;
+		height: 100%;
 		min-height: 0;
 	}
 
@@ -1320,7 +1326,8 @@ textarea::placeholder {
 
 @media (max-width: 760px) {
 	.admin-page {
-		padding: 16px;
+		height: calc(100dvh - 16px);
+		padding: 12px;
 	}
 
 	.admin-header {

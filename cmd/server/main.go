@@ -64,6 +64,9 @@ func main() {
 	mux.HandleFunc("/auth/reset-password", app.ResetPassword)
 	mux.HandleFunc("/styles.css", servePublicStatic("styles.css"))
 	mux.HandleFunc("/logo.svg", servePublicStatic("logo.svg"))
+	mux.HandleFunc("/manifest.webmanifest", servePublicStatic("manifest.webmanifest"))
+	mux.HandleFunc("/service-worker.js", servePublicStatic("service-worker.js"))
+	mux.HandleFunc("/pwa.js", servePublicStatic("pwa.js"))
 	mux.Handle("/", app.RequireAuth(staticFileServer(staticFiles())))
 	mux.Handle("/api/account", app.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {
@@ -659,6 +662,9 @@ func servePublicStatic(name string) http.HandlerFunc {
 		}
 		if writeStaticCacheHeaders(w, r, staticFiles(), name) {
 			return
+		}
+		if name == "manifest.webmanifest" {
+			w.Header().Set("Content-Type", "application/manifest+json")
 		}
 		http.ServeFileFS(w, r, staticFiles(), name)
 	}
