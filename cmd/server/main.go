@@ -466,7 +466,7 @@ func appVersion() string {
 	if revision == "" {
 		return buildTimeVersion()
 	}
-	revision = lastCommitChars(revision)
+	revision = CommitShortName(revision)
 	if modified == "true" {
 		return revision + "-dirty"
 	}
@@ -480,7 +480,7 @@ func buildTimeVersion() string {
 	return "dev"
 }
 
-func lastCommitChars(revision string) string {
+func CommitShortName(revision string) string {
 	if len(revision) > 7 {
 		return revision[:7]
 	}
