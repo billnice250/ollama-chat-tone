@@ -6,7 +6,7 @@ DIST_DIR ?= dist
 BIN_DIR ?= bin
 BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 VERSION ?= $(shell tag=$$(git describe --tags --exact-match 2>/dev/null); dirty=$$(git diff --quiet --ignore-submodules HEAD 2>/dev/null || echo -dirty); if [ -n "$$tag" ]; then printf '%s%s' "$$tag" "$$dirty"; else sha=$$(git rev-parse --verify HEAD 2>/dev/null); if [ -n "$$sha" ]; then printf '%s%s' "$$(printf '%s' "$$sha" | sed 's/.*\(.......\)$$/\1/')" "$$dirty"; else printf '%s' "$(BUILD_TIME)"; fi; fi)
-LDFLAGS ?= -s -w -X main.buildTime=$(BUILD_TIME)
+LDFLAGS ?= -s -w -X main.buildTime=$(BUILD_TIME) 
 GO_CACHE_DIR ?= $(CURDIR)/.gocache
 ICON_ICNS ?= assets/logo.icns
 ICON_ICO ?= assets/logo.ico

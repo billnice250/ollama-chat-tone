@@ -27,7 +27,10 @@
 				<input id="username" name="username" type="email" placeholder="you@example.com" autocomplete="username email" required autofocus>
 
 				<label for="password">Password</label>
-				<input id="password" name="password" type="password" placeholder="Password" autocomplete="{{.PasswordAutocomplete}}" required>
+				<div class="password-field">
+					<input id="password" name="password" type="password" placeholder="Password" autocomplete="{{.PasswordAutocomplete}}" required>
+					<button class="password-toggle" type="button" data-password-toggle="password" aria-label="Show password">Show</button>
+				</div>
 
 				<button class="auth-button" type="submit">{{.Title}}</button>
 			</form>
@@ -47,10 +50,25 @@
 		{{if .ShowResetForm}}
 			<form class="auth-form" method="post" action="{{.Action}}">
 				<label for="password">New password</label>
-				<input id="password" name="password" type="password" placeholder="New password" autocomplete="new-password" required autofocus>
+				<div class="password-field">
+					<input id="password" name="password" type="password" placeholder="New password" autocomplete="new-password" required autofocus>
+					<button class="password-toggle" type="button" data-password-toggle="password" aria-label="Show password">Show</button>
+				</div>
 				<button class="auth-button" type="submit">Reset password</button>
 			</form>
 		{{end}}
 	</main>
+	<script>
+		for (const button of document.querySelectorAll('[data-password-toggle]')) {
+			button.addEventListener('click', () => {
+				const input = document.getElementById(button.dataset.passwordToggle);
+				if (!input) return;
+				const show = input.type === 'password';
+				input.type = show ? 'text' : 'password';
+				button.textContent = show ? 'Hide' : 'Show';
+				button.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+			});
+		}
+	</script>
 </body>
 </html>

@@ -832,6 +832,28 @@ select {
 	color: var(--color-text);
 }
 
+.password-field {
+	position: relative;
+}
+
+.password-field input {
+	padding-right: 68px;
+}
+
+.password-toggle {
+	position: absolute;
+	top: 5px;
+	right: 5px;
+	height: 32px;
+	padding: 0 10px;
+	border: 1px solid var(--color-line);
+	border-radius: 6px;
+	background: var(--color-surface);
+	color: var(--color-accent-strong);
+	font-size: 13px;
+	font-weight: 700;
+}
+
 .auth-form input::placeholder {
 	color: var(--color-muted);
 }

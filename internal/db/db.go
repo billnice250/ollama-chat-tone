@@ -652,6 +652,17 @@ func (s *Store) CompleteChatJob(ctx context.Context, user, conversationID, id, c
 	}
 	defer tx.Rollback()
 
+	var currentStatus string
+	if err := tx.QueryRowContext(ctx, `
+SELECT status
+FROM chat_jobs
+WHERE user_email = ? AND conversation_id = ? AND id = ?`, user, conversationID, id).Scan(&currentStatus); err != nil {
+		return nil, err
+	}
+	if currentStatus != "running" {
+		return nil, sql.ErrNoRows
+	}
+
 	res, err := tx.ExecContext(ctx, `
 INSERT INTO messages (conversation_id, role, content, thinking, model, created_at)
 VALUES (?, 'assistant', ?, ?, ?, CURRENT_TIMESTAMP)`, conversationID, content, thinking, model)
@@ -665,7 +676,7 @@ VALUES (?, 'assistant', ?, ?, ?, CURRENT_TIMESTAMP)`, conversationID, content, t
 	if _, err := tx.ExecContext(ctx, `
 UPDATE chat_jobs
 SET status = 'complete', content = ?, thinking = ?, model = ?, message_id = ?, updated_at = CURRENT_TIMESTAMP
-WHERE user_email = ? AND conversation_id = ? AND id = ?`, content, thinking, model, messageID, user, conversationID, id); err != nil {
+WHERE user_email = ? AND conversation_id = ? AND id = ? AND status = 'running'`, content, thinking, model, messageID, user, conversationID, id); err != nil {
 		return nil, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE user_email = ? AND id = ?`, user, conversationID); err != nil {
@@ -698,6 +709,17 @@ WHERE user_email = ? AND conversation_id = ? AND id = ? AND status = 'running'`,
 		return err
 	}
 	if n == 0 {
+		var status string
+		err := s.DB.QueryRowContext(ctx, `
+SELECT status
+FROM chat_jobs
+WHERE user_email = ? AND conversation_id = ? AND id = ?`, user, conversationID, id).Scan(&status)
+		if err != nil {
+			return err
+		}
+		if status == "canceled" {
+			return nil
+		}
 		return sql.ErrNoRows
 	}
 	return nil

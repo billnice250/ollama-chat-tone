@@ -975,7 +975,13 @@ func handleChatJob(w http.ResponseWriter, r *http.Request, store *db.Store, oc *
 				writeDBError(w, err, "job not found")
 				return
 			}
-			auth.WriteJSON(w, map[string]any{"canceled": true})
+			job, err := store.GetChatJob(r.Context(), user, conversationID, jobID)
+			if err != nil {
+				writeDBError(w, err, "job not found")
+				return
+			}
+			jobs.publish(jobID, jobUpdate{Status: job.Status, Content: job.Content, Thinking: job.Thinking, Model: job.Model, Error: job.Error})
+			auth.WriteJSON(w, map[string]any{"canceled": true, "job": job})
 			return
 		}
 	}
@@ -1076,6 +1082,12 @@ func runChatJob(ctx context.Context, store *db.Store, oc *ollama.Client, jobs *j
 		return
 	}
 	if _, err := store.CompleteChatJob(context.Background(), user, conversationID, jobID, content, thinking, model); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			if job, getErr := store.GetChatJob(context.Background(), user, conversationID, jobID); getErr == nil && job.Status != "running" {
+				jobs.publish(jobID, jobUpdate{Status: job.Status, Content: job.Content, Thinking: job.Thinking, Model: job.Model, Error: job.Error})
+				return
+			}
+		}
 		jobs.publish(jobID, jobUpdate{Status: "error", Content: content, Thinking: thinking, Model: model, Error: err.Error()})
 		if failErr := store.FailChatJob(context.Background(), user, conversationID, jobID, err.Error()); failErr != nil {
 			log.Printf("runChatJob: fail job=%s after complete err=%v", jobID, failErr)
