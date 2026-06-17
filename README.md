@@ -35,7 +35,7 @@ If the configured address is already in use, the app assumes another instance is
 
 ## Reload Configuration
 
-You can reload most `.env` settings without restarting the app. Use the sidebar `Reload config` button, or call the API:
+You can reload most `.env` settings without restarting the app. This does not reload a newly built binary or new embedded web assets; deploys still need the container or process to be restarted/recreated. Use the sidebar `Reload config` button, or call the API:
 
 ```bash
 curl -X POST http://localhost:8080/api/config/reload
@@ -53,7 +53,7 @@ With Docker Compose:
 docker compose kill -s HUP ollama-chat-tone
 ```
 
-Reload updates runtime settings such as `APP_NAME`, `OLLAMA_URL`, `OLLAMA_TIMEOUT`, `DEFAULT_MODEL`, and auth settings. `ADDR` and `DB_PATH` still require a restart because the listener and database connection are already open. The reload control lives on the admin page with the Ollama settings.
+Reload updates runtime settings such as `APP_NAME`, `OLLAMA_URL`, `OLLAMA_TIMEOUT`, `DEFAULT_MODEL`, and auth settings. Code changes, embedded static files, `ADDR`, and `DB_PATH` require a restart because the executable, listener, and database connection are already open. The reload control lives on the admin page with the Ollama settings.
 
 ## Run A Release Binary
 
@@ -174,7 +174,6 @@ name: ollama-chat-tone
 services:
   ollama-chat-tone:
     build: .
-    image: ollama-chat-tone:local
     ports:
       - "8080:8080"
     environment:
@@ -191,6 +190,14 @@ services:
     depends_on:
       ollama-models:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    stop_grace_period: 25s
+    restart: unless-stopped
 
   ollama:
     image: ollama/ollama:latest
@@ -198,6 +205,7 @@ services:
       - "11434:11434"
     volumes:
       - ollama-data:/root/.ollama
+    restart: unless-stopped
 
   ollama-models:
     image: ollama/ollama:latest

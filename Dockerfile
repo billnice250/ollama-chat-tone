@@ -31,8 +31,8 @@ COPY --from=build /out/server /app/server
 
 VOLUME ["/data"]
 
-ENV ADDR=":12129"
+ENV ADDR=":8080"
 
-EXPOSE 12129
+EXPOSE 8080
 
 ENTRYPOINT ["/app/server"]

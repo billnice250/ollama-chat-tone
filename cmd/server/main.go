@@ -444,7 +444,39 @@ func main() {
 			}
 		}()
 	}
-	log.Fatal(http.Serve(listener, requestLogger(mux)))
+
+	server := &http.Server{
+		Handler:           requestLogger(mux),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- server.Serve(listener)
+	}()
+
+	shutdownSignals := make(chan os.Signal, 1)
+	signal.Notify(shutdownSignals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(shutdownSignals)
+
+	select {
+	case err := <-serveErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	case sig := <-shutdownSignals:
+		log.Printf("shutdown signal received signal=%s", sig)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			log.Printf("graceful shutdown error err=%v", err)
+			if closeErr := server.Close(); closeErr != nil {
+				log.Printf("forced shutdown error err=%v", closeErr)
+			}
+		}
+		if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	}
 }
 
 func contextBackground() context.Context { return context.Background() }
