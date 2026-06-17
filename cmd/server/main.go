@@ -747,10 +747,18 @@ func (m *jobManager) cancel(id string) {
 	}
 }
 
+// jobSubscriberBufSize is the buffer depth for each SSE subscriber channel.
+// It is sized to absorb a burst of in-flight chunks between two consecutive
+// channel reads without dropping updates.  The channel is non-blocking on send
+// (see publish), so a truly slow client will miss intermediate chunks but will
+// always receive the final terminal event because the LLM output rate is far
+// below this limit in practice.
+const jobSubscriberBufSize = 128
+
 // subscribe returns a channel that receives jobUpdate events for the given job.
 // If the job is not currently running the returned channel is already closed.
 func (m *jobManager) subscribe(id string) chan jobUpdate {
-	ch := make(chan jobUpdate, 128)
+	ch := make(chan jobUpdate, jobSubscriberBufSize)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.cancels[id]; !ok {
@@ -776,7 +784,10 @@ func (m *jobManager) unsubscribe(id string, ch chan jobUpdate) {
 }
 
 // publish fans out an update to all current subscribers of id.
-// Slow subscribers are skipped (non-blocking send) to avoid stalling the job.
+// Each send is non-blocking: a subscriber whose channel buffer is full will
+// miss that intermediate chunk but will still receive the final terminal event
+// (complete / error / canceled) because that publish is always followed by
+// remove(), which closes the channel and wakes the subscriber.
 func (m *jobManager) publish(id string, update jobUpdate) {
 	m.mu.Lock()
 	if len(m.subscribers[id]) == 0 {

@@ -776,11 +776,13 @@ function streamServerJob(chat, jobId, assistant) {
 		}
 	};
 
-	es.onerror = () => {
+	es.onerror = (event) => {
 		// Only treat as an error when the job is still active.  When the server
 		// closes the SSE connection after a terminal event the browser fires
 		// onerror; by then state.activeJob is already null so we ignore it.
 		if (state.activeJob) {
+			const detail = event.type ? `type=${event.type} readyState=${es.readyState}` : '';
+			console.error('SSE connection error', detail);
 			stopJobStream();
 			state.activeJob = null;
 			setStreaming(false);
