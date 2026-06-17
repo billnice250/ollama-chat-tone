@@ -137,6 +137,28 @@ GitHub Releases are built by `.github/workflows/release.yml`. When a release is 
 
 ## Docker
 
+For a dedicated container guide (Docker Hub, Docker run, and Docker Compose), see [DOCKER.md](DOCKER.md).
+
+### Docker Hub Overview
+
+Prebuilt images are published to Docker Hub:
+
+- Repository: [billnice250/chattone](https://hub.docker.com/r/billnice250/chattone)
+- Pulls:
+  - `docker pull billnice250/chattone:latest`
+  - `docker pull billnice250/chattone:<version>`
+
+Quick run example:
+
+```bash
+docker run --rm -p 8080:8080 --env-file .env -e DB_PATH=/data/app.db -v ollama-chat-tone-data:/data billnice250/chattone:latest
+```
+
+Tag guidance:
+
+- `latest`: newest published build.
+- `<version>`: pinned release tag for reproducible deployments.
+
 Build and run the app container:
 
 ```bash
