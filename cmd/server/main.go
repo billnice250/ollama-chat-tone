@@ -482,7 +482,7 @@ func buildTimeVersion() string {
 
 func lastCommitChars(revision string) string {
 	if len(revision) > 7 {
-		return revision[len(revision)-7:]
+		return revision[:7]
 	}
 	return revision
 }
