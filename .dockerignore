@@ -1,2 +1,7 @@
 *.db
 /data
+.gocache
+bin/
+dist/
+.DS_Store
+.github

@@ -15,6 +15,11 @@ RUN build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
     -o /out/server \
     ./cmd/server
 
+RUN echo "embedded Go build metadata:" && \
+    go version -m /out/server && \
+    echo "embedded VCS metadata:" && \
+    go version -m /out/server | grep -E 'build[[:space:]]+vcs'
+
 
 FROM alpine:latest AS production
 WORKDIR /app
