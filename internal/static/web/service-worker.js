@@ -6,7 +6,6 @@ const STATIC_ASSETS = [
 	'/admin.js',
 	'/pwa.js',
 	'/logo.svg',
-	'/manifest.webmanifest',
 ];
 
 self.addEventListener('install', (event) => {
@@ -37,7 +36,7 @@ self.addEventListener('fetch', (event) => {
 	}
 
 	const url = new URL(request.url);
-	if (url.origin !== self.location.origin || url.pathname.startsWith('/api/') || url.pathname.startsWith('/auth/')) {
+	if (url.origin !== self.location.origin || url.pathname === '/manifest.webmanifest' || url.pathname.startsWith('/api/') || url.pathname.startsWith('/auth/')) {
 		return;
 	}
 

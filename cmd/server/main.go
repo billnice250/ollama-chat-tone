@@ -64,7 +64,7 @@ func main() {
 	mux.HandleFunc("/auth/reset-password", app.ResetPassword)
 	mux.HandleFunc("/styles.css", servePublicStatic("styles.css"))
 	mux.HandleFunc("/logo.svg", servePublicStatic("logo.svg"))
-	mux.HandleFunc("/manifest.webmanifest", servePublicStatic("manifest.webmanifest"))
+	mux.HandleFunc("/manifest.webmanifest", serveManifest(app))
 	mux.HandleFunc("/service-worker.js", servePublicStatic("service-worker.js"))
 	mux.HandleFunc("/pwa.js", servePublicStatic("pwa.js"))
 	mux.Handle("/", app.RequireAuth(staticFileServer(staticFiles())))
@@ -667,6 +667,42 @@ func servePublicStatic(name string) http.HandlerFunc {
 			w.Header().Set("Content-Type", "application/manifest+json")
 		}
 		http.ServeFileFS(w, r, staticFiles(), name)
+	}
+}
+
+func serveManifest(app *appRuntime) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		appName := app.Config().AppName
+		if appName == "" {
+			appName = "Ollama Chat Tone"
+		}
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Content-Type", "application/manifest+json")
+		if r.Method == http.MethodHead {
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"name":             appName,
+			"short_name":       appName,
+			"description":      "A local-first chat client for Ollama.",
+			"start_url":        "/",
+			"scope":            "/",
+			"display":          "standalone",
+			"background_color": "#070b13",
+			"theme_color":      "#070b13",
+			"icons": []map[string]string{
+				{
+					"src":     "/logo.svg",
+					"sizes":   "any",
+					"type":    "image/svg+xml",
+					"purpose": "any maskable",
+				},
+			},
+		})
 	}
 }
 
