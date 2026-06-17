@@ -4,8 +4,9 @@ APP_BUNDLE_ID ?= it.billnice.chattone
 CMD ?= ./cmd/server
 DIST_DIR ?= dist
 BIN_DIR ?= bin
-VERSION ?= $(shell tag=$$(git describe --tags --exact-match 2>/dev/null); dirty=$$(git diff --quiet --ignore-submodules HEAD 2>/dev/null || echo -dirty); if [ -n "$$tag" ]; then printf '%s%s' "$$tag" "$$dirty"; else sha=$$(git rev-parse --verify HEAD 2>/dev/null); if [ -n "$$sha" ]; then printf '%s%s' "$$(printf '%s' "$$sha" | sed 's/.*\(.......\)$$/\1/')" "$$dirty"; else printf dev; fi; fi)
-LDFLAGS ?= -s -w
+BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+VERSION ?= $(shell tag=$$(git describe --tags --exact-match 2>/dev/null); dirty=$$(git diff --quiet --ignore-submodules HEAD 2>/dev/null || echo -dirty); if [ -n "$$tag" ]; then printf '%s%s' "$$tag" "$$dirty"; else sha=$$(git rev-parse --verify HEAD 2>/dev/null); if [ -n "$$sha" ]; then printf '%s%s' "$$(printf '%s' "$$sha" | sed 's/.*\(.......\)$$/\1/')" "$$dirty"; else printf '%s' "$(BUILD_TIME)"; fi; fi)
+LDFLAGS ?= -s -w -X main.buildTime=$(BUILD_TIME)
 GO_CACHE_DIR ?= $(CURDIR)/.gocache
 ICON_ICNS ?= assets/logo.icns
 ICON_ICO ?= assets/logo.ico
@@ -73,7 +74,7 @@ define package_binary
 	arch="$(2)"; \
 	ext=""; \
 	if [ "$$os" = "windows" ]; then ext=".exe"; fi; \
-	name="$(APP_NAME)_$(VERSION)_$${os}_$${arch}"; \
+	name="$(APP_NAME)_$${os}_$${arch}"; \
 	work="$(DIST_DIR)/$${name}"; \
 	mkdir -p "$$work"; \
 	echo "building release asset $$name"; \

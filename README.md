@@ -144,7 +144,7 @@ docker build -t ollama-chat-tone:local .
 docker run --rm -p 8080:8080 --env-file .env -e DB_PATH=/data/app.db -v ollama-chat-tone-data:/data ollama-chat-tone:local
 ```
 
-Image builds set the app-page version from Go VCS metadata automatically. The Docker build context must include `.git`; this repo does not ignore `.git` in [.dockerignore](.dockerignore). The displayed fallback is the last 7 characters of the commit hash, plus `-dirty` when Go reports local changes.
+Image builds set the app-page version from Go VCS metadata automatically. The Docker build context must include `.git`; this repo does not ignore `.git` in [.dockerignore](.dockerignore). The displayed version is the last 7 characters of the commit hash, plus `-dirty` when Go reports local changes. If VCS metadata is unavailable, Makefile and Docker builds inject a UTC build timestamp instead.
 
 If Ollama is running on the host machine from Docker Desktop, set:
 

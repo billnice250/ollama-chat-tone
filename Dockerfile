@@ -8,9 +8,10 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build \
+RUN build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
+    CGO_ENABLED=0 GOOS=linux go build \
     -trimpath \
-    -ldflags="-s -w" \
+    -ldflags="-s -w -X main.buildTime=${build_time}" \
     -o /out/server \
     ./cmd/server
 

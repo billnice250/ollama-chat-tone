@@ -36,6 +36,8 @@ import (
 	"golang.org/x/crypto/pkcs12"
 )
 
+var buildTime = ""
+
 func main() {
 	cfg := config.Load()
 	store, err := db.Open(cfg.DBPath)
@@ -462,13 +464,25 @@ func appVersion() string {
 		}
 	}
 	if revision == "" {
-		return "dev"
+		return buildTimeVersion()
 	}
-	if len(revision) > 7 {
-		revision = revision[len(revision)-7:]
-	}
+	revision = lastCommitChars(revision)
 	if modified == "true" {
 		return revision + "-dirty"
+	}
+	return revision
+}
+
+func buildTimeVersion() string {
+	if buildTime != "" {
+		return buildTime
+	}
+	return "dev"
+}
+
+func lastCommitChars(revision string) string {
+	if len(revision) > 7 {
+		return revision[len(revision)-7:]
 	}
 	return revision
 }
