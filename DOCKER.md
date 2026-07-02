@@ -2,6 +2,22 @@
 
 This project ships with both local Docker build instructions and prebuilt Docker Hub images.
 
+## Screenshots
+
+See the app login and chat UI from the main project docs:
+
+![Login screen](docs/screenshot_login.png)
+
+![Chat screen](docs/screenshot_chatscreen.png)
+
+## Features
+
+- Local user authentication and optional OAuth/OIDC support
+- Persistent per-user chat history with SQLite backend
+- Streaming Ollama model responses in the browser
+- Runtime config reload with Docker-friendly signals
+- Prebuilt Docker Hub images plus local build support
+
 ## GitHub
 
 - Source: [billnice250/ollama-chat-client](https://github.com/billnice250/ollama-chat-client)

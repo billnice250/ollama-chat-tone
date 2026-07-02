@@ -2,6 +2,23 @@
 
 Self-contained Go web client for Ollama with local login, optional OIDC/OAuth login, streaming responses, per-user conversations, and embedded static assets.
 
+## Features
+
+- Local login plus optional OIDC/OAuth authentication
+- Per-user conversation history with persistent storage
+- Real-time streaming responses from Ollama
+- Admin dashboard and runtime config reload without restart
+- Docker and Docker Compose deployment support
+- Embedded static assets for a self-contained distribution
+
+## Screenshots
+
+Login and chat views are included below:
+
+![Login screen](docs/screenshot_login.png)
+
+![Chat screen](docs/screenshot_chatscreen.png)
+
 ## Configuration
 
 Create a local `.env` from the example:
