@@ -86,23 +86,21 @@ func (m *Manager) RequireAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		if localAvailable(m.cfg) {
-			username, ok := m.readSession(r)
-			if ok {
-				user, err := m.store.GetUser(r.Context(), username)
-				if err == nil && user.Approved && user.EmailVerified {
-					_ = m.store.TouchUser(r.Context(), user.Username)
-					ctx := context.WithValue(r.Context(), EmailKey, user.Username)
-					ctx = context.WithValue(ctx, AdminKey, user.IsAdmin)
-					next.ServeHTTP(w, r.WithContext(ctx))
-					return
-				}
+		username, ok := m.readSession(r)
+		if ok {
+			user, err := m.store.GetUser(r.Context(), username)
+			if err == nil && user.Approved && user.EmailVerified {
+				_ = m.store.TouchUser(r.Context(), user.Username)
+				ctx := context.WithValue(r.Context(), EmailKey, user.Username)
+				ctx = context.WithValue(ctx, AdminKey, user.IsAdmin)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
 			}
-			// Clear any stale or invalid session cookie (failed HMAC, missing user,
-			// or account not yet approved/verified) so it doesn't keep redirecting.
-			if readCookie(r, sessionCookie) != "" {
-				clearCookie(w, sessionCookie)
-			}
+		}
+		// Clear any stale or invalid session cookie (failed HMAC, missing user,
+		// or account not yet approved/verified) so it doesn't keep redirecting.
+		if readCookie(r, sessionCookie) != "" {
+			clearCookie(w, sessionCookie)
 		}
 
 		if oidcAvailable(m.cfg) {
@@ -111,6 +109,8 @@ func (m *Manager) RequireAuth(next http.Handler) http.Handler {
 				user, err := m.store.GetUser(r.Context(), email)
 				if err == nil && user.Approved {
 					_ = m.store.TouchUser(r.Context(), user.Username)
+					setCookie(w, sessionCookie, m.signSession(user.Username), false)
+					clearCookie(w, "email")
 					ctx := context.WithValue(r.Context(), EmailKey, user.Username)
 					ctx = context.WithValue(ctx, AdminKey, user.IsAdmin)
 					next.ServeHTTP(w, r.WithContext(ctx))
@@ -231,11 +231,11 @@ func (m *Manager) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodGet {
 		m.writeAuthPage(w, authPageData{
-			AppName: m.cfg.AppName,
-			Title:   "Forgot password",
-			Action:  "/auth/forgot-password",
-			AltHref: "/auth/login",
-			AltText: "Back to login",
+			AppName:        m.cfg.AppName,
+			Title:          "Forgot password",
+			Action:         "/auth/forgot-password",
+			AltHref:        "/auth/login",
+			AltText:        "Back to login",
 			ShowForgotForm: true,
 		})
 		return
@@ -279,10 +279,10 @@ func (m *Manager) ResetPassword(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		m.writeAuthPage(w, authPageData{
-			AppName:        m.cfg.AppName,
-			Title:          "Reset password",
-			Action:         "/auth/reset-password?token=" + tok,
-			ShowResetForm:  true,
+			AppName:       m.cfg.AppName,
+			Title:         "Reset password",
+			Action:        "/auth/reset-password?token=" + tok,
+			ShowResetForm: true,
 		})
 		return
 	}
@@ -375,7 +375,9 @@ func (m *Manager) Callback(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	setCookie(w, "email", email, false)
+	setCookie(w, sessionCookie, m.signSession(user.Username), false)
+	clearCookie(w, "email")
+	clearCookie(w, "state")
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 

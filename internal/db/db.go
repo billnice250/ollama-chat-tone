@@ -185,9 +185,9 @@ VALUES (?, ?, 0, 0, 0, CURRENT_TIMESTAMP)`, username, passwordHash)
 
 func (s *Store) EnsurePendingUser(ctx context.Context, username string) (*User, error) {
 	_, err := s.DB.ExecContext(ctx, `
-INSERT INTO users (username, password_hash, approved, is_admin, created_at)
-VALUES (?, '', 0, 0, CURRENT_TIMESTAMP)
-ON CONFLICT(username) DO NOTHING`, username)
+INSERT INTO users (username, password_hash, approved, is_admin, email_verified, created_at)
+VALUES (?, '', 0, 0, 1, CURRENT_TIMESTAMP)
+ON CONFLICT(username) DO UPDATE SET email_verified = 1`, username)
 	if err != nil {
 		return nil, err
 	}
