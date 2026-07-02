@@ -19,6 +19,7 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment: deploy-to-docker
 
     steps:
       - name: Checkout
