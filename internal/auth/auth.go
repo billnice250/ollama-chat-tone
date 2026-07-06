@@ -322,6 +322,7 @@ func (m *Manager) ResetPassword(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Manager) Callback(w http.ResponseWriter, r *http.Request) {
+	log.Println("auth: Callback received, starting validation.")
 	if m.oauth2Config == nil || m.verifier == nil {
 		http.NotFound(w, r)
 		return
@@ -375,6 +376,7 @@ func (m *Manager) Callback(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	log.Printf("auth: OIDC passed. Setting auth success cookie for email %q and username %s ",email,user.Username)
 	setCookie(w, sessionCookie, m.signSession(user.Username), false)
 	clearCookie(w, "email")
 	clearCookie(w, "state")
