@@ -58,8 +58,12 @@ func GenerateSessionSecret() string {
 
 func Load() Config {
 	fileEnv := dotenv(".env")
-	logLevel := logger.NormalizeLevel(getenv(fileEnv, "LOG_LEVEL", "info"))
+	rawLogLevel := getenv(fileEnv, "LOG_LEVEL", "info")
+	logLevel := logger.NormalizeLevel(rawLogLevel)
 	l := logger.New(logLevel).With("component", "config")
+	if rawLogLevel != "" && !logger.IsValidLevel(rawLogLevel) {
+		l.Warn("invalid LOG_LEVEL; falling back to info", "provided", rawLogLevel)
+	}
 	secret := getenv(fileEnv, "SESSION_SECRET", "")
 	if secret == "" {
 		l.Warn("SESSION_SECRET not set; generating random secret. Sessions will be invalidated on restart")
