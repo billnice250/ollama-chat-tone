@@ -47,7 +47,7 @@ func main() {
 	store, err := db.Open(cfg.DBPath)
 	if err != nil {
 		appLog.Error("database open failed", "path", cfg.DBPath, "error", err)
-		log.Fatal(err)
+		os.Exit(1)
 	}
 	appLog.Info("database opened", "path", cfg.DBPath)
 	defer store.DB.Close()
