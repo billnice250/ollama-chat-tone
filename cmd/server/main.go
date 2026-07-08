@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -54,7 +53,8 @@ func main() {
 
 	app, err := newAppRuntime(contextBackground(), cfg, store)
 	if err != nil {
-		log.Fatal(err)
+		appLog.Error("failed to initialize app runtime", "error", err)
+		os.Exit(1)
 	}
 	jobs := newJobManager()
 	watchReloadSignal(app)
@@ -436,22 +436,23 @@ func main() {
 	if err != nil {
 		if addressInUse(err) {
 			url := appURL(cfg.Addr)
-			log.Printf("%s appears to already be running at %s", cfg.AppName, url)
+			appLog.Info("appears to already be running", "app", cfg.AppName, "url", url)
 			if err := openBrowser(url); err != nil {
-				log.Printf("open browser error url=%s err=%v", url, err)
+				appLog.Warn("open browser error", "url", url, "error", err)
 			}
 			return
 		}
-		log.Fatal(err)
+		appLog.Error("listen failed", "error", err)
+		os.Exit(1)
 	}
 	actualAddr := listener.Addr().String()
 	url := appURL(actualAddr)
-	log.Printf("%s version=%s running at %s", cfg.AppName, appVersion(), url)
-	log.Printf("listening on %s configured=%s auth=%s ollama=%s timeout=%s", actualAddr, cfg.Addr, cfg.AuthMode(), cfg.OllamaURL, cfg.OllamaTimeout)
+	appLog.Info("server running", "app", cfg.AppName, "version", appVersion(), "url", url)
+	appLog.Info("listening", "addr", actualAddr, "configured", cfg.Addr, "auth", cfg.AuthMode(), "ollama", cfg.OllamaURL, "timeout", cfg.OllamaTimeout)
 	if cfg.OpenBrowser {
 		go func() {
 			if err := openBrowser(url); err != nil {
-				log.Printf("open browser error url=%s err=%v", url, err)
+				appLog.Warn("open browser error", "url", url, "error", err)
 			}
 		}()
 	}
@@ -472,20 +473,22 @@ func main() {
 	select {
 	case err := <-serveErr:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatal(err)
+			appLog.Error("serve error", "error", err)
+			os.Exit(1)
 		}
 	case sig := <-shutdownSignals:
-		log.Printf("shutdown signal received signal=%s", sig)
+		appLog.Info("shutdown signal received", "signal", sig)
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		if err := server.Shutdown(ctx); err != nil {
-			log.Printf("graceful shutdown error err=%v", err)
+			appLog.Warn("graceful shutdown error", "error", err)
 			if closeErr := server.Close(); closeErr != nil {
-				log.Printf("forced shutdown error err=%v", closeErr)
+				appLog.Error("forced shutdown error", "error", closeErr)
 			}
 		}
 		if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatal(err)
+			appLog.Error("serve error after shutdown", "error", err)
+			os.Exit(1)
 		}
 	}
 }
@@ -1018,7 +1021,7 @@ func handleChatJob(w http.ResponseWriter, r *http.Request, store *db.Store, oc *
 				writeError(w, http.StatusServiceUnavailable, "previous response is still being finalized; try again")
 				return
 			}
-			log.Printf("cleared orphaned chat job user=%q conversation=%s job=%s", user, conversationID, active.ID)
+			appLog.Info("cleared orphaned chat job", "user", user, "conversation", conversationID, "job", active.ID)
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -1182,7 +1185,7 @@ func runChatJob(ctx context.Context, store *db.Store, oc *ollama.Client, jobs *j
 		lastPersist = time.Now()
 		if err := store.UpdateChatJob(context.Background(), user, conversationID, jobID, content, thinking); err != nil {
 			if db.IsBusy(err) {
-				log.Printf("runChatJob: skipped busy progress update job=%s err=%v", jobID, err)
+				appLog.Debug("runChatJob: skipped busy progress update", "job", jobID, "error", err)
 				return nil
 			}
 			return err
@@ -1195,7 +1198,7 @@ func runChatJob(ctx context.Context, store *db.Store, oc *ollama.Client, jobs *j
 			if cancelErr := retryDBWrite(context.Background(), func(ctx context.Context) error {
 				return store.CancelChatJob(ctx, user, conversationID, jobID)
 			}); cancelErr != nil {
-				log.Printf("runChatJob: cancel job=%s err=%v", jobID, cancelErr)
+				appLog.Warn("runChatJob: cancel job error", "job", jobID, "error", cancelErr)
 			}
 			return
 		}
@@ -1203,7 +1206,7 @@ func runChatJob(ctx context.Context, store *db.Store, oc *ollama.Client, jobs *j
 		if failErr := retryDBWrite(context.Background(), func(ctx context.Context) error {
 			return store.FailChatJob(ctx, user, conversationID, jobID, err.Error())
 		}); failErr != nil {
-			log.Printf("runChatJob: fail job=%s err=%v", jobID, failErr)
+			appLog.Warn("runChatJob: fail job error", "job", jobID, "error", failErr)
 		}
 		return
 	}
@@ -1222,7 +1225,7 @@ func runChatJob(ctx context.Context, store *db.Store, oc *ollama.Client, jobs *j
 		if failErr := retryDBWrite(context.Background(), func(ctx context.Context) error {
 			return store.FailChatJob(ctx, user, conversationID, jobID, err.Error())
 		}); failErr != nil {
-			log.Printf("runChatJob: fail job=%s after complete err=%v", jobID, failErr)
+			appLog.Warn("runChatJob: fail job after complete error", "job", jobID, "error", failErr)
 		}
 		return
 	}
@@ -1408,7 +1411,8 @@ func addressInUse(err error) bool {
 func staticFiles() fs.FS {
 	sub, err := static.Files()
 	if err != nil {
-		log.Fatal(err)
+		appLog.Error("failed to load static files", "error", err)
+		os.Exit(1)
 	}
 	return sub
 }
