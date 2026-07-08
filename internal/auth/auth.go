@@ -450,8 +450,8 @@ func (m *Manager) Callback(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	lg.Info("OIDC login succeeded", "username", user.Username)
-	setCookie(w, sessionCookie, m.signSession(user.Username), false, lg.With("username", user.Username))
+	lg.Info("OIDC login succeeded")
+	setCookie(w, sessionCookie, m.signSession(user.Username), false, lg)
 	clearCookie(w, "email", lg)
 	clearCookie(w, "state", lg)
 	http.Redirect(w, r, "/", http.StatusFound)
