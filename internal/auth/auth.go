@@ -458,7 +458,7 @@ func (m *Manager) Callback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Manager) Logout(w http.ResponseWriter, r *http.Request) {
-	lg := m.logger().With("path", r.URL.Path, "remote", r.RemoteAddr)
+	lg := m.logger().With("path", r.URL.Path, "remote", anonymizeRemoteAddr(r.RemoteAddr))
 	lg.Info("logout requested")
 	clearCookie(w, "email", lg)
 	if localAvailable(m.cfg) {
