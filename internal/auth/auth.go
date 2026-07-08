@@ -309,9 +309,9 @@ func (m *Manager) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 				link := m.absURL("/auth/reset-password?token=" + tok)
 				_ = m.mailer.Send(email, "Reset your password – "+m.cfg.AppName,
 					"Click the link below to reset your password:\n\n"+link+"\n\nThis link expires in 1 hour.")
-				lg.Info("password reset token created", "email", email)
+				lg.Info("password reset token created")
 			} else {
-				lg.Warn("failed to create password reset token", "email", email, "error", err)
+				lg.Warn("failed to create password reset token", "error", err)
 			}
 		}
 	}
