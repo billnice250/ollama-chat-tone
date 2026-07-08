@@ -64,6 +64,7 @@ func main() {
 	mux.HandleFunc("/auth/login", app.Login)
 	mux.HandleFunc("/auth/signup", app.Signup)
 	mux.HandleFunc("/auth/callback", app.Callback)
+	mux.HandleFunc("/auth/login/callback", app.Callback)
 	mux.HandleFunc("/auth/logout", app.Logout)
 	mux.HandleFunc("/auth/verify", app.Verify)
 	mux.HandleFunc("/auth/forgot-password", app.ForgotPassword)
