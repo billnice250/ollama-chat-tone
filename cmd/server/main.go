@@ -121,11 +121,11 @@ func main() {
 		}
 		cfg, warnings, err := app.Reload(r.Context())
 		if err != nil {
-			appLog.Error("config reload error", "remote", r.RemoteAddr, "error", err)
+			appLog.Error("config reload error", "remote", anonymizeRemoteAddr(r.RemoteAddr), "error", err)
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		appLog.Info("config reloaded", "remote", r.RemoteAddr, "app", cfg.AppName, "auth", cfg.AuthMode(), "ollama", cfg.OllamaURL, "timeout", cfg.OllamaTimeout, "warnings", strings.Join(warnings, "; "))
+		appLog.Info("config reloaded", "remote", anonymizeRemoteAddr(r.RemoteAddr), "app", cfg.AppName, "auth", cfg.AuthMode(), "ollama", cfg.OllamaURL, "timeout", cfg.OllamaTimeout, "warnings", strings.Join(warnings, "; "))
 		auth.WriteJSON(w, map[string]any{
 			"reloaded":     true,
 			"appName":      cfg.AppName,
@@ -147,11 +147,11 @@ func main() {
 		}
 		users, err := store.ListUsers(r.Context())
 		if err != nil {
-			appLog.Error("list admin users failed", "remote", r.RemoteAddr, "error", err)
+			appLog.Error("list admin users failed", "remote", anonymizeRemoteAddr(r.RemoteAddr), "error", err)
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		appLog.Debug("listed admin users", "remote", r.RemoteAddr, "count", len(users))
+		appLog.Debug("listed admin users", "remote", anonymizeRemoteAddr(r.RemoteAddr), "count", len(users))
 		auth.WriteJSON(w, map[string]any{"users": users})
 	})))
 	mux.Handle("/api/admin/users/", app.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -274,11 +274,11 @@ func main() {
 			// Apply settings immediately.
 			cfg, warnings, err := app.Reload(r.Context())
 			if err != nil {
-				appLog.Error("settings apply error", "remote", r.RemoteAddr, "error", err)
+				appLog.Error("settings apply error", "remote", anonymizeRemoteAddr(r.RemoteAddr), "error", err)
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			appLog.Info("settings updated", "remote", r.RemoteAddr, "app", cfg.AppName, "ollama", cfg.OllamaURL, "timeout", cfg.OllamaTimeout, "warnings", strings.Join(warnings, "; "))
+			appLog.Info("settings updated", "remote", anonymizeRemoteAddr(r.RemoteAddr), "app", cfg.AppName, "ollama", cfg.OllamaURL, "timeout", cfg.OllamaTimeout, "warnings", strings.Join(warnings, "; "))
 			auth.WriteJSON(w, map[string]any{"applied": true, "warnings": warnings})
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -326,7 +326,7 @@ func main() {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			appLog.Info("mTLS cert updated", "remote", r.RemoteAddr, "app", cfg.AppName, "warnings", strings.Join(warnings, "; "))
+			appLog.Info("mTLS cert updated", "remote", anonymizeRemoteAddr(r.RemoteAddr), "app", cfg.AppName, "warnings", strings.Join(warnings, "; "))
 			auth.WriteJSON(w, map[string]any{"applied": true, "warnings": warnings})
 		case http.MethodDelete:
 			_ = store.DeleteSetting(r.Context(), "ollama_tls_pfx")
@@ -336,7 +336,7 @@ func main() {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			appLog.Info("mTLS cert removed", "remote", r.RemoteAddr, "app", cfg.AppName, "warnings", strings.Join(warnings, "; "))
+			appLog.Info("mTLS cert removed", "remote", anonymizeRemoteAddr(r.RemoteAddr), "app", cfg.AppName, "warnings", strings.Join(warnings, "; "))
 			auth.WriteJSON(w, map[string]any{"removed": true, "warnings": warnings})
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -392,7 +392,7 @@ func main() {
 		}
 		models, err := app.Ollama().Models(r.Context())
 		if err != nil {
-			appLog.Error("model listing error", "remote", r.RemoteAddr, "error", err)
+			appLog.Error("model listing error", "remote", anonymizeRemoteAddr(r.RemoteAddr), "error", err)
 			writeError(w, http.StatusBadGateway, err.Error())
 			return
 		}
@@ -405,7 +405,7 @@ func main() {
 		}
 		var req ollama.ChatRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			appLog.Warn("chat decode error", "remote", r.RemoteAddr, "error", err)
+			appLog.Warn("chat decode error", "remote", anonymizeRemoteAddr(r.RemoteAddr), "error", err)
 			writeError(w, http.StatusBadRequest, "bad request")
 			return
 		}
@@ -415,20 +415,20 @@ func main() {
 		if req.Stream {
 			if err := streamChat(w, r, app.Ollama(), req); err != nil {
 				if errors.Is(err, context.Canceled) {
-					appLog.Info("chat stream canceled", "remote", r.RemoteAddr, "model", req.Model)
+					appLog.Info("chat stream canceled", "remote", anonymizeRemoteAddr(r.RemoteAddr), "model", req.Model)
 				} else {
-					appLog.Error("chat stream error", "remote", r.RemoteAddr, "model", req.Model, "error", err)
+					appLog.Error("chat stream error", "remote", anonymizeRemoteAddr(r.RemoteAddr), "model", req.Model, "error", err)
 				}
 			}
 			return
 		}
 		res, err := app.Ollama().Chat(r.Context(), req)
 		if err != nil {
-			appLog.Error("chat error", "remote", r.RemoteAddr, "model", req.Model, "error", err)
+			appLog.Error("chat error", "remote", anonymizeRemoteAddr(r.RemoteAddr), "model", req.Model, "error", err)
 			writeError(w, http.StatusBadGateway, err.Error())
 			return
 		}
-		appLog.Info("chat ok", "remote", r.RemoteAddr, "model", req.Model, "messages", len(req.Messages))
+		appLog.Info("chat ok", "remote", anonymizeRemoteAddr(r.RemoteAddr), "model", req.Model, "messages", len(req.Messages))
 		auth.WriteJSON(w, res)
 	})))
 
@@ -1265,7 +1265,7 @@ func requestLogger(next http.Handler) http.Handler {
 		next.ServeHTTP(lw, r)
 		requestID := r.Header.Get("X-Request-ID")
 		user := userFromRequest(r)
-		entry := appLog.With("method", r.Method, "path", r.URL.Path, "status", lw.status, "remote", r.RemoteAddr)
+		entry := appLog.With("method", r.Method, "path", r.URL.Path, "status", lw.status, "remote", anonymizeRemoteAddr(r.RemoteAddr))
 		if requestID != "" {
 			entry = entry.With("requestID", requestID)
 		}
@@ -1332,7 +1332,7 @@ func streamChat(w http.ResponseWriter, r *http.Request, oc *ollama.Client, req o
 		if chunk.Message.Thinking != "" {
 			thinkingChunks++
 			if thinkingChunks == 1 {
-				appLog.Debug("chat stream includes thinking", "remote", r.RemoteAddr, "model", req.Model)
+				appLog.Debug("chat stream includes thinking", "remote", anonymizeRemoteAddr(r.RemoteAddr), "model", req.Model)
 			}
 		}
 		if err := enc.Encode(chunk); err != nil {
@@ -1352,8 +1352,27 @@ func streamChat(w http.ResponseWriter, r *http.Request, oc *ollama.Client, req o
 		return err
 	}
 
-	appLog.Info("chat stream ok", "remote", r.RemoteAddr, "model", req.Model, "messages", len(req.Messages), "chunks", chunks, "thinkingChunks", thinkingChunks)
+	appLog.Info("chat stream ok", "remote", anonymizeRemoteAddr(r.RemoteAddr), "model", req.Model, "messages", len(req.Messages), "chunks", chunks, "thinkingChunks", thinkingChunks)
 	return nil
+}
+
+func anonymizeRemoteAddr(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return host
+	}
+	if ipv4 := ip.To4(); ipv4 != nil {
+		return net.IPv4(ipv4[0], ipv4[1], ipv4[2], 0).String()
+	}
+	ip = ip.To16()
+	if ip == nil {
+		return host
+	}
+	return net.IP(ip[:8]).String() + "::"
 }
 
 func appURL(addr string) string {

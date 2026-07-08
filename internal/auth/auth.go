@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"html/template"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -95,7 +96,7 @@ func (m *Manager) logger() *logger.Log {
 
 func (m *Manager) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		lg := m.logger().With("path", r.URL.Path, "method", r.Method, "remote", r.RemoteAddr)
+		lg := m.logger().With("path", r.URL.Path, "method", r.Method, "remote", anonymizeRemoteAddr(r.RemoteAddr))
 		if m.cfg.AuthMode() == "none" {
 			lg.Debug("auth bypassed in zero-auth mode")
 			ctx := context.WithValue(r.Context(), EmailKey, "anonymous")
@@ -157,7 +158,7 @@ func (m *Manager) RequireAuth(next http.Handler) http.Handler {
 }
 
 func (m *Manager) Login(w http.ResponseWriter, r *http.Request) {
-	lg := m.logger().With("path", r.URL.Path, "method", r.Method, "remote", r.RemoteAddr)
+	lg := m.logger().With("path", r.URL.Path, "method", r.Method, "remote", anonymizeRemoteAddr(r.RemoteAddr))
 	if m.cfg.AuthMode() == "none" {
 		lg.Debug("login endpoint hit in zero-auth mode; redirecting")
 		http.Redirect(w, r, "/", http.StatusFound)
@@ -188,7 +189,7 @@ func (m *Manager) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Manager) startOIDC(w http.ResponseWriter, r *http.Request) {
-	lg := m.logger().With("path", r.URL.Path, "remote", r.RemoteAddr)
+	lg := m.logger().With("path", r.URL.Path, "remote", anonymizeRemoteAddr(r.RemoteAddr))
 	state := randomState()
 	setCookie(w, "state", state, true, lg)
 	lg.Info("redirecting to OIDC provider")
@@ -196,7 +197,7 @@ func (m *Manager) startOIDC(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Manager) Signup(w http.ResponseWriter, r *http.Request) {
-	lg := m.logger().With("path", r.URL.Path, "method", r.Method, "remote", r.RemoteAddr)
+	lg := m.logger().With("path", r.URL.Path, "method", r.Method, "remote", anonymizeRemoteAddr(r.RemoteAddr))
 	if !localAvailable(m.cfg) {
 		lg.Debug("signup requested while local auth disabled")
 		http.NotFound(w, r)
@@ -257,7 +258,7 @@ func (m *Manager) Signup(w http.ResponseWriter, r *http.Request) {
 
 // Verify handles the email verification link.
 func (m *Manager) Verify(w http.ResponseWriter, r *http.Request) {
-	lg := m.logger().With("path", r.URL.Path, "remote", r.RemoteAddr)
+	lg := m.logger().With("path", r.URL.Path, "remote", anonymizeRemoteAddr(r.RemoteAddr))
 	tok := r.URL.Query().Get("token")
 	if tok == "" {
 		lg.Warn("email verification failed: missing token")
@@ -277,7 +278,7 @@ func (m *Manager) Verify(w http.ResponseWriter, r *http.Request) {
 
 // ForgotPassword shows / handles the forgot-password form.
 func (m *Manager) ForgotPassword(w http.ResponseWriter, r *http.Request) {
-	lg := m.logger().With("path", r.URL.Path, "method", r.Method, "remote", r.RemoteAddr)
+	lg := m.logger().With("path", r.URL.Path, "method", r.Method, "remote", anonymizeRemoteAddr(r.RemoteAddr))
 	if !localAvailable(m.cfg) {
 		http.NotFound(w, r)
 		return
@@ -325,7 +326,7 @@ func (m *Manager) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 
 // ResetPassword handles the password-reset form.
 func (m *Manager) ResetPassword(w http.ResponseWriter, r *http.Request) {
-	lg := m.logger().With("path", r.URL.Path, "method", r.Method, "remote", r.RemoteAddr)
+	lg := m.logger().With("path", r.URL.Path, "method", r.Method, "remote", anonymizeRemoteAddr(r.RemoteAddr))
 	if !localAvailable(m.cfg) {
 		http.NotFound(w, r)
 		return
@@ -384,7 +385,7 @@ func (m *Manager) ResetPassword(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Manager) Callback(w http.ResponseWriter, r *http.Request) {
-	lg := m.logger().With("path", r.URL.Path, "remote", r.RemoteAddr)
+	lg := m.logger().With("path", r.URL.Path, "remote", anonymizeRemoteAddr(r.RemoteAddr))
 	lg.Info("OIDC callback received")
 	if m.oauth2Config == nil || m.verifier == nil {
 		lg.Warn("OIDC callback received while provider is unavailable")
@@ -449,7 +450,7 @@ func (m *Manager) Callback(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	lg.Info("OIDC login succeeded", "email", email, "username", user.Username)
+	lg.Info("OIDC login succeeded", "username", user.Username)
 	setCookie(w, sessionCookie, m.signSession(user.Username), false, lg.With("username", user.Username))
 	clearCookie(w, "email", lg)
 	clearCookie(w, "state", lg)
@@ -471,7 +472,7 @@ func (m *Manager) Logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Manager) localLogin(w http.ResponseWriter, r *http.Request) {
-	lg := m.logger().With("path", r.URL.Path, "method", r.Method, "remote", r.RemoteAddr)
+	lg := m.logger().With("path", r.URL.Path, "method", r.Method, "remote", anonymizeRemoteAddr(r.RemoteAddr))
 	if r.Method == http.MethodGet {
 		m.writeLocalAuthPage(w, "Log in", "", false)
 		return
@@ -552,7 +553,7 @@ func (m *Manager) signSession(username string) string {
 }
 
 func (m *Manager) readSession(r *http.Request) (string, bool) {
-	lg := m.logger().With("path", r.URL.Path, "remote", r.RemoteAddr)
+	lg := m.logger().With("path", r.URL.Path, "remote", anonymizeRemoteAddr(r.RemoteAddr))
 	v := readCookie(r, sessionCookie, lg)
 	i := strings.LastIndex(v, ".")
 	if i <= 0 || i == len(v)-1 {
@@ -575,6 +576,25 @@ func (m *Manager) absURL(path string) string {
 		base = "http://localhost" + m.cfg.Addr
 	}
 	return base + path
+}
+
+func anonymizeRemoteAddr(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return host
+	}
+	if ipv4 := ip.To4(); ipv4 != nil {
+		return net.IPv4(ipv4[0], ipv4[1], ipv4[2], 0).String()
+	}
+	ip = ip.To16()
+	if ip == nil {
+		return host
+	}
+	return net.IP(ip[:8]).String() + "::"
 }
 
 type authPageData struct {
