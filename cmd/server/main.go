@@ -1372,7 +1372,7 @@ func anonymizeRemoteAddr(addr string) string {
 	if ip == nil {
 		return host
 	}
-	return net.IP(ip[:8]).String() + "::"
+	return ip.Mask(net.CIDRMask(64, 128)).String()
 }
 
 func appURL(addr string) string {
