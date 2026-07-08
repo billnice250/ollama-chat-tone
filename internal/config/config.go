@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/billnice250/ollama-chat-tone/internal/logger"
 )
 
 type Config struct {
@@ -22,6 +24,7 @@ type Config struct {
 	OllamaTimeout time.Duration
 	DefaultModel  string
 	OpenBrowser   bool
+	LogLevel      string
 
 	BasicUser string
 	BasicPass string
@@ -55,15 +58,17 @@ func GenerateSessionSecret() string {
 
 func Load() Config {
 	fileEnv := dotenv(".env")
+	logLevel := logger.NormalizeLevel(getenv(fileEnv, "LOG_LEVEL", "info"))
+	l := logger.New(logLevel).With("component", "config")
 	secret := getenv(fileEnv, "SESSION_SECRET", "")
 	if secret == "" {
-		log.Println("WARNING: SESSION_SECRET not set, generating random secret. This will invalidate all sessions on restart.")
+		l.Warn("SESSION_SECRET not set; generating random secret. Sessions will be invalidated on restart")
 		secret = GenerateSessionSecret()
 		os.Setenv("SESSION_SECRET", secret)
 	} else if len(secret) < 32 {
-		log.Println("WARNING: SESSION_SECRET is less than 32 characters, which may be insecure.")
+		l.Warn("SESSION_SECRET is less than 32 characters and may be insecure")
 	} else {
-		log.Println("Using provided SESSION_SECRET.")
+		l.Debug("using provided SESSION_SECRET")
 	}
 	return Config{
 		AppName:          getenv(fileEnv, "APP_NAME", "Ollama Chat Tone"),
@@ -74,6 +79,7 @@ func Load() Config {
 		OllamaTimeout:    durationMinutes(fileEnv, "OLLAMA_TIMEOUT", 5),
 		DefaultModel:     getenv(fileEnv, "DEFAULT_MODEL", "llama3.2"),
 		OpenBrowser:      boolEnv(fileEnv, "OPEN_BROWSER", false),
+		LogLevel:         logLevel,
 		BasicUser:        getenv(fileEnv, "BASIC_AUTH_USER", ""),
 		BasicPass:        getenv(fileEnv, "BASIC_AUTH_PASSWORD", ""),
 		OIDCIssuer:       getenv(fileEnv, "OIDC_ISSUER", ""),
@@ -100,6 +106,9 @@ func (c Config) AuthMode() string {
 }
 
 func (c Config) Validate() error {
+	if !logger.IsValidLevel(c.LogLevel) {
+		return fmt.Errorf("LOG_LEVEL must be one of: debug, info, warn, error")
+	}
 	_, port, err := net.SplitHostPort(c.Addr)
 	if err != nil {
 		return fmt.Errorf("ADDR must be in host:port form: %w", err)

@@ -9,7 +9,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"html/template"
-	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/billnice250/ollama-chat-tone/internal/config"
 	"github.com/billnice250/ollama-chat-tone/internal/db"
+	"github.com/billnice250/ollama-chat-tone/internal/logger"
 	"github.com/billnice250/ollama-chat-tone/internal/mailer"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/crypto/bcrypt"
@@ -39,6 +39,7 @@ type Manager struct {
 	cfg          config.Config
 	store        *db.Store
 	mailer       *mailer.Mailer
+	log          *logger.Log
 	provider     *oidc.Provider
 	verifier     *oidc.IDTokenVerifier
 	oauth2Config *oauth2.Config
@@ -50,9 +51,14 @@ func New(ctx context.Context, cfg config.Config, store *db.Store) (*Manager, err
 	if err != nil {
 		return nil, err
 	}
+	lg := logger.New(cfg.LogLevel).With("component", "auth")
 	ml := mailer.New(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.SMTPFrom)
-	m := &Manager{cfg: cfg, store: store, mailer: ml, templates: tmpl}
+	m := &Manager{cfg: cfg, store: store, mailer: ml, log: lg, templates: tmpl}
+	if cfg.AuthMode() == "none" {
+		lg.Warn("zero-auth mode active; all requests bypass authentication")
+	}
 	if localAvailable(cfg) {
+		lg.Info("initializing local auth admin user", "username", strings.ToLower(cfg.BasicUser))
 		hash, err := bcrypt.GenerateFromPassword([]byte(cfg.BasicPass), bcrypt.DefaultCost)
 		if err != nil {
 			return nil, err
@@ -62,8 +68,10 @@ func New(ctx context.Context, cfg config.Config, store *db.Store) (*Manager, err
 		}
 	}
 	if oidcAvailable(cfg) {
+		lg.Info("initializing OIDC provider", "issuer", cfg.OIDCIssuer)
 		p, err := oidc.NewProvider(ctx, cfg.OIDCIssuer)
 		if err != nil {
+			lg.Error("failed to initialize OIDC provider", "issuer", cfg.OIDCIssuer, "error", err)
 			return nil, err
 		}
 		m.provider = p
@@ -73,13 +81,23 @@ func New(ctx context.Context, cfg config.Config, store *db.Store) (*Manager, err
 			RedirectURL: cfg.OIDCRedirectURL,
 			Endpoint:    p.Endpoint(), Scopes: []string{oidc.ScopeOpenID, "email", "profile"},
 		}
+		lg.Debug("OIDC provider initialized", "redirect", cfg.OIDCRedirectURL)
 	}
 	return m, nil
 }
 
+func (m *Manager) logger() *logger.Log {
+	if m.log != nil {
+		return m.log
+	}
+	return logger.New(m.cfg.LogLevel).With("component", "auth")
+}
+
 func (m *Manager) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lg := m.logger().With("path", r.URL.Path, "method", r.Method, "remote", r.RemoteAddr)
 		if m.cfg.AuthMode() == "none" {
+			lg.Debug("auth bypassed in zero-auth mode")
 			ctx := context.WithValue(r.Context(), EmailKey, "anonymous")
 			ctx = context.WithValue(ctx, AdminKey, false)
 			next.ServeHTTP(w, r.WithContext(ctx))
@@ -88,52 +106,70 @@ func (m *Manager) RequireAuth(next http.Handler) http.Handler {
 
 		username, ok := m.readSession(r)
 		if ok {
+			lg.Debug("session validated", "username", username)
 			user, err := m.store.GetUser(r.Context(), username)
 			if err == nil && user.Approved && user.EmailVerified {
 				_ = m.store.TouchUser(r.Context(), user.Username)
+				lg.Debug("session accepted", "username", user.Username, "admin", user.IsAdmin)
 				ctx := context.WithValue(r.Context(), EmailKey, user.Username)
 				ctx = context.WithValue(ctx, AdminKey, user.IsAdmin)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
+			if err != nil {
+				lg.Warn("session user lookup failed", "username", username, "error", err)
+			} else {
+				lg.Warn("session denied due to approval/verification state", "username", username, "approved", user.Approved, "emailVerified", user.EmailVerified)
+			}
 		}
 		// Clear any stale or invalid session cookie (failed HMAC, missing user,
 		// or account not yet approved/verified) so it doesn't keep redirecting.
-		if readCookie(r, sessionCookie) != "" {
-			clearCookie(w, sessionCookie)
+		if readCookie(r, sessionCookie, lg) != "" {
+			clearCookie(w, sessionCookie, lg)
 		}
 
 		if oidcAvailable(m.cfg) {
-			email := readCookie(r, "email")
+			email := readCookie(r, "email", lg)
 			if email != "" {
 				user, err := m.store.GetUser(r.Context(), email)
 				if err == nil && user.Approved {
 					_ = m.store.TouchUser(r.Context(), user.Username)
-					setCookie(w, sessionCookie, m.signSession(user.Username), false)
-					clearCookie(w, "email")
+					setCookie(w, sessionCookie, m.signSession(user.Username), false, lg.With("username", user.Username))
+					clearCookie(w, "email", lg)
+					lg.Info("authenticated with OIDC cookie bridge", "username", user.Username)
 					ctx := context.WithValue(r.Context(), EmailKey, user.Username)
 					ctx = context.WithValue(ctx, AdminKey, user.IsAdmin)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
-				clearCookie(w, "email")
+				if err != nil {
+					lg.Warn("OIDC cookie bridge user lookup failed", "email", email, "error", err)
+				} else {
+					lg.Warn("OIDC cookie bridge denied; user not approved", "email", email)
+				}
+				clearCookie(w, "email", lg)
 			}
 		}
 
+		lg.Info("auth required; redirecting to login")
 		http.Redirect(w, r, "/auth/login", http.StatusFound)
 	})
 }
 
 func (m *Manager) Login(w http.ResponseWriter, r *http.Request) {
+	lg := m.logger().With("path", r.URL.Path, "method", r.Method, "remote", r.RemoteAddr)
 	if m.cfg.AuthMode() == "none" {
+		lg.Debug("login endpoint hit in zero-auth mode; redirecting")
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
 	}
 	if r.URL.Query().Get("provider") == "oidc" && oidcAvailable(m.cfg) && m.oauth2Config != nil {
+		lg.Info("starting OIDC login flow")
 		m.startOIDC(w, r)
 		return
 	}
 	if localAvailable(m.cfg) {
+		lg.Debug("using local login flow")
 		m.localLogin(w, r)
 		return
 	}
@@ -152,13 +188,17 @@ func (m *Manager) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Manager) startOIDC(w http.ResponseWriter, r *http.Request) {
+	lg := m.logger().With("path", r.URL.Path, "remote", r.RemoteAddr)
 	state := randomState()
-	setCookie(w, "state", state, true)
+	setCookie(w, "state", state, true, lg)
+	lg.Info("redirecting to OIDC provider")
 	http.Redirect(w, r, m.oauth2Config.AuthCodeURL(state), http.StatusFound)
 }
 
 func (m *Manager) Signup(w http.ResponseWriter, r *http.Request) {
+	lg := m.logger().With("path", r.URL.Path, "method", r.Method, "remote", r.RemoteAddr)
 	if !localAvailable(m.cfg) {
+		lg.Debug("signup requested while local auth disabled")
 		http.NotFound(w, r)
 		return
 	}
@@ -173,10 +213,12 @@ func (m *Manager) Signup(w http.ResponseWriter, r *http.Request) {
 	username := strings.ToLower(strings.TrimSpace(r.FormValue("username")))
 	password := r.FormValue("password")
 	if username == "" || password == "" {
+		lg.Warn("signup failed: missing credentials")
 		m.writeLocalAuthPage(w, "Register", "email and password are required", true)
 		return
 	}
 	if !emailRE.MatchString(username) {
+		lg.Warn("signup failed: invalid email format", "username", username)
 		m.writeLocalAuthPage(w, "Register", "a valid email address is required", true)
 		return
 	}
@@ -186,9 +228,11 @@ func (m *Manager) Signup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := m.store.CreateUser(r.Context(), username, string(hash)); err != nil {
+		lg.Warn("signup failed: could not create user", "username", username, "error", err)
 		m.writeLocalAuthPage(w, "Register", "user already exists or cannot be created", true)
 		return
 	}
+	lg.Info("signup created user", "username", username)
 
 	// Send email verification link if mailer is available.
 	if m.mailer.Available() {
@@ -197,6 +241,9 @@ func (m *Manager) Signup(w http.ResponseWriter, r *http.Request) {
 			link := m.absURL("/auth/verify?token=" + tok)
 			_ = m.mailer.Send(username, "Verify your email – "+m.cfg.AppName,
 				"Click the link below to verify your email address:\n\n"+link+"\n\nThis link expires in 24 hours.")
+			lg.Info("email verification token created", "username", username)
+		} else {
+			lg.Warn("failed to create email verification token", "username", username, "error", err)
 		}
 		m.writeLocalAuthPage(w, "Register", "check your email for a verification link", true)
 		return
@@ -204,27 +251,33 @@ func (m *Manager) Signup(w http.ResponseWriter, r *http.Request) {
 
 	// No mailer: auto-verify and let admin approve.
 	_ = m.store.VerifyEmail(r.Context(), username)
+	lg.Info("signup auto-verified email because mailer unavailable", "username", username)
 	m.writeLocalAuthPage(w, "Register", "request submitted; wait for an admin to approve access", true)
 }
 
 // Verify handles the email verification link.
 func (m *Manager) Verify(w http.ResponseWriter, r *http.Request) {
+	lg := m.logger().With("path", r.URL.Path, "remote", r.RemoteAddr)
 	tok := r.URL.Query().Get("token")
 	if tok == "" {
+		lg.Warn("email verification failed: missing token")
 		m.writeSimplePage(w, "Verify email", "Missing verification token.")
 		return
 	}
 	username, err := m.store.ConsumeToken(r.Context(), tok, "verify")
 	if err != nil {
+		lg.Warn("email verification failed: invalid/expired token", "error", err)
 		m.writeSimplePage(w, "Verify email", "The verification link is invalid or has expired.")
 		return
 	}
 	_ = m.store.VerifyEmail(r.Context(), username)
+	lg.Info("email verified", "username", username)
 	m.writeSimplePage(w, "Email verified", "Your email has been verified. An admin will approve your access shortly.")
 }
 
 // ForgotPassword shows / handles the forgot-password form.
 func (m *Manager) ForgotPassword(w http.ResponseWriter, r *http.Request) {
+	lg := m.logger().With("path", r.URL.Path, "method", r.Method, "remote", r.RemoteAddr)
 	if !localAvailable(m.cfg) {
 		http.NotFound(w, r)
 		return
@@ -247,6 +300,7 @@ func (m *Manager) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 	email := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
 	// Always show the same message to prevent user enumeration.
 	msg := "If an account with that email exists, a reset link has been sent."
+	lg.Info("password reset requested", "email", email != "")
 	if email != "" && m.mailer.Available() {
 		if _, err := m.store.GetUser(r.Context(), email); err == nil {
 			tok, err := m.store.CreateToken(r.Context(), email, "reset", time.Hour)
@@ -254,6 +308,9 @@ func (m *Manager) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 				link := m.absURL("/auth/reset-password?token=" + tok)
 				_ = m.mailer.Send(email, "Reset your password – "+m.cfg.AppName,
 					"Click the link below to reset your password:\n\n"+link+"\n\nThis link expires in 1 hour.")
+				lg.Info("password reset token created", "email", email)
+			} else {
+				lg.Warn("failed to create password reset token", "email", email, "error", err)
 			}
 		}
 	}
@@ -268,6 +325,7 @@ func (m *Manager) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 
 // ResetPassword handles the password-reset form.
 func (m *Manager) ResetPassword(w http.ResponseWriter, r *http.Request) {
+	lg := m.logger().With("path", r.URL.Path, "method", r.Method, "remote", r.RemoteAddr)
 	if !localAvailable(m.cfg) {
 		http.NotFound(w, r)
 		return
@@ -295,6 +353,7 @@ func (m *Manager) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	password := r.FormValue("password")
 	if password == "" {
+		lg.Warn("password reset failed: empty password")
 		m.writeAuthPage(w, authPageData{
 			AppName:       m.cfg.AppName,
 			Title:         "Reset password",
@@ -306,6 +365,7 @@ func (m *Manager) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	username, err := m.store.ConsumeToken(r.Context(), tok, "reset")
 	if err != nil {
+		lg.Warn("password reset failed: invalid/expired token", "error", err)
 		m.writeSimplePage(w, "Reset password", "The reset link is invalid or has expired. Please request a new one.")
 		return
 	}
@@ -315,34 +375,44 @@ func (m *Manager) ResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := m.store.SetPassword(r.Context(), username, string(hash)); err != nil {
+		lg.Error("password reset failed during password write", "username", username, "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	lg.Info("password reset complete", "username", username)
 	m.writeSimplePage(w, "Password reset", "Your password has been reset. You can now log in.")
 }
 
 func (m *Manager) Callback(w http.ResponseWriter, r *http.Request) {
-	log.Println("auth: Callback received, starting validation.")
+	lg := m.logger().With("path", r.URL.Path, "remote", r.RemoteAddr)
+	lg.Info("OIDC callback received")
 	if m.oauth2Config == nil || m.verifier == nil {
+		lg.Warn("OIDC callback received while provider is unavailable")
 		http.NotFound(w, r)
 		return
 	}
-	if r.URL.Query().Get("state") != readCookie(r, "state") {
+	if r.URL.Query().Get("state") != readCookie(r, "state", lg) {
+		lg.Warn("OIDC callback rejected due to bad state")
 		http.Error(w, "bad state", 400)
 		return
 	}
+	lg.Debug("exchanging OIDC auth code for token")
 	tok, err := m.oauth2Config.Exchange(r.Context(), r.URL.Query().Get("code"))
 	if err != nil {
+		lg.Error("OIDC token exchange failed", "error", err)
 		http.Error(w, err.Error(), 500)
 		return
 	}
 	rawID, ok := tok.Extra("id_token").(string)
 	if !ok {
+		lg.Error("OIDC callback missing id_token")
 		http.Error(w, "missing id_token", 500)
 		return
 	}
+	lg.Debug("verifying OIDC id_token")
 	idToken, err := m.verifier.Verify(r.Context(), rawID)
 	if err != nil {
+		lg.Error("OIDC id_token verification failed", "error", err)
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -350,22 +420,25 @@ func (m *Manager) Callback(w http.ResponseWriter, r *http.Request) {
 		Email string `json:"email"`
 	}
 	if err := idToken.Claims(&claims); err != nil {
+		lg.Error("OIDC claim parsing failed", "error", err)
 		http.Error(w, err.Error(), 500)
 		return
 	}
 	email := strings.ToLower(claims.Email)
 	if email == "" {
+		lg.Error("OIDC callback missing email claim")
 		http.Error(w, "missing email claim", 500)
 		return
 	}
 	user, err := m.store.EnsurePendingUser(r.Context(), email)
 	if err != nil {
+		lg.Error("OIDC pending user creation failed", "email", email, "error", err)
 		http.Error(w, err.Error(), 500)
 		return
 	}
 	if !user.Approved {
-		log.Printf("auth: OIDC login denied for %q: account not approved", email)
-		clearCookie(w, "email")
+		lg.Warn("OIDC login denied: account not approved", "email", email)
+		clearCookie(w, "email", lg)
 		m.writeAuthPage(w, authPageData{
 			AppName:    m.cfg.AppName,
 			Title:      "Approval pending",
@@ -376,17 +449,19 @@ func (m *Manager) Callback(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	log.Printf("auth: OIDC passed. Setting auth success cookie for email %q and username %s ",email,user.Username)
-	setCookie(w, sessionCookie, m.signSession(user.Username), false)
-	clearCookie(w, "email")
-	clearCookie(w, "state")
+	lg.Info("OIDC login succeeded", "email", email, "username", user.Username)
+	setCookie(w, sessionCookie, m.signSession(user.Username), false, lg.With("username", user.Username))
+	clearCookie(w, "email", lg)
+	clearCookie(w, "state", lg)
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 func (m *Manager) Logout(w http.ResponseWriter, r *http.Request) {
-	clearCookie(w, "email")
+	lg := m.logger().With("path", r.URL.Path, "remote", r.RemoteAddr)
+	lg.Info("logout requested")
+	clearCookie(w, "email", lg)
 	if localAvailable(m.cfg) {
-		clearCookie(w, sessionCookie)
+		clearCookie(w, sessionCookie, lg)
 	}
 	if m.cfg.AuthMode() != "none" {
 		m.writeLogoutPage(w)
@@ -396,6 +471,7 @@ func (m *Manager) Logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Manager) localLogin(w http.ResponseWriter, r *http.Request) {
+	lg := m.logger().With("path", r.URL.Path, "method", r.Method, "remote", r.RemoteAddr)
 	if r.Method == http.MethodGet {
 		m.writeLocalAuthPage(w, "Log in", "", false)
 		return
@@ -406,38 +482,43 @@ func (m *Manager) localLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	username := strings.ToLower(strings.TrimSpace(r.FormValue("username")))
 	password := r.FormValue("password")
+	lg.Debug("local login attempt", "username", username)
 	user, err := m.store.GetUser(r.Context(), username)
 	if err != nil || bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)) != nil {
-		log.Printf("auth: login failed for %q: invalid credentials", username)
+		lg.Warn("login failed: invalid credentials", "username", username)
 		m.writeLocalAuthPage(w, "Log in", "invalid email or password", false)
 		return
 	}
 	if !user.EmailVerified {
-		log.Printf("auth: login failed for %q: email not verified", username)
+		lg.Warn("login failed: email not verified", "username", username)
 		m.writeLocalAuthPage(w, "Log in", "please verify your email address before logging in", false)
 		return
 	}
 	if !user.Approved {
-		log.Printf("auth: login failed for %q: account not approved", username)
+		lg.Warn("login failed: account not approved", "username", username)
 		m.writeLocalAuthPage(w, "Log in", "your signup is waiting for admin approval", false)
 		return
 	}
-	setCookie(w, sessionCookie, m.signSession(user.Username), false)
+	lg.Info("local login succeeded", "username", user.Username)
+	setCookie(w, sessionCookie, m.signSession(user.Username), false, lg.With("username", user.Username))
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
-func setCookie(w http.ResponseWriter, name, value string, short bool) {
+func setCookie(w http.ResponseWriter, name, value string, short bool, lg *logger.Log) {
 	max := 86400 * 30
 	if short {
 		max = 600
 	}
+	lg.Debug("set cookie", "name", name, "short", short, "maxAge", max)
 	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/", MaxAge: max, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 }
-func readCookie(r *http.Request, name string) string {
+func readCookie(r *http.Request, name string, lg *logger.Log) string {
 	c, err := r.Cookie(name)
 	if err != nil {
+		lg.Debug("read cookie miss", "name", name)
 		return ""
 	}
+	lg.Debug("read cookie hit", "name", name)
 	return c.Value
 }
 func randomState() string {
@@ -450,7 +531,8 @@ func WriteJSON(w http.ResponseWriter, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
-func clearCookie(w http.ResponseWriter, name string) {
+func clearCookie(w http.ResponseWriter, name string, lg *logger.Log) {
+	lg.Debug("clear cookie", "name", name)
 	http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 }
 
@@ -470,13 +552,21 @@ func (m *Manager) signSession(username string) string {
 }
 
 func (m *Manager) readSession(r *http.Request) (string, bool) {
-	v := readCookie(r, sessionCookie)
+	lg := m.logger().With("path", r.URL.Path, "remote", r.RemoteAddr)
+	v := readCookie(r, sessionCookie, lg)
 	i := strings.LastIndex(v, ".")
 	if i <= 0 || i == len(v)-1 {
+		if v != "" {
+			lg.Warn("session cookie malformed")
+		}
 		return "", false
 	}
 	username := v[:i]
-	return username, hmac.Equal([]byte(m.signSession(username)), []byte(v))
+	ok := hmac.Equal([]byte(m.signSession(username)), []byte(v))
+	if !ok {
+		lg.Warn("session signature invalid", "username", username)
+	}
+	return username, ok
 }
 
 func (m *Manager) absURL(path string) string {
