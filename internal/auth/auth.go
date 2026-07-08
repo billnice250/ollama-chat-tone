@@ -392,8 +392,10 @@ func (m *Manager) Callback(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if r.URL.Query().Get("state") != readCookie(r, "state", lg) {
-		lg.Warn("OIDC callback rejected due to bad state")
+	gotState := r.URL.Query().Get("state")
+	wantState := readCookie(r, "state", lg)
+	if gotState != wantState {
+		lg.Warn("OIDC callback rejected due to bad state", "statePresent", gotState != "", "cookiePresent", wantState != "")
 		http.Error(w, "bad state", 400)
 		return
 	}
