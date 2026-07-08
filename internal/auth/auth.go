@@ -144,9 +144,9 @@ func (m *Manager) RequireAuth(next http.Handler) http.Handler {
 					return
 				}
 				if err != nil {
-					lg.Warn("OIDC cookie bridge user lookup failed", "email", email, "error", err)
+					lg.Warn("OIDC cookie bridge user lookup failed", "error", err)
 				} else {
-					lg.Warn("OIDC cookie bridge denied; user not approved", "email", email)
+					lg.Warn("OIDC cookie bridge denied; user not approved")
 				}
 				clearCookie(w, "email", lg)
 			}
